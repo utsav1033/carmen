@@ -65,3 +65,13 @@ def test_playbook_rejects_unproven_and_shape_specific_lessons(tmp_path):
 
 def test_lint_allows_hardware_numbers():
     assert lint("Use a threadgroup of 256 threads with simd_sum reductions for long rows.") is None
+
+
+def test_litellm_client_and_json_parsing(monkeypatch):
+    from carmen import carmy
+    monkeypatch.setenv("LITELLM_API_KEY", "sk-test")
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://proxy:4000")
+    assert carmy.via_litellm() and str(carmy._client().base_url).startswith("http://proxy:4000")
+    assert carmy._parse_json('```json\n{"a": 1}\n```') == {"a": 1}
+    monkeypatch.setenv("CARMEN_STRUCTURED", "0")
+    assert "format" not in carmy._request("s", "p", {}, "m", "high")["output_config"]

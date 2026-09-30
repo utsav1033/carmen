@@ -55,6 +55,15 @@ carmen run masked_softmax            # let Carmy cook
 carmen report runs/<id>
 ```
 
+**Going through a LiteLLM proxy?** Point carmen at it instead of Anthropic directly:
+
+```bash
+export LITELLM_API_KEY=sk-...                      # your LiteLLM key
+export LITELLM_BASE_URL=http://localhost:4000      # your proxy
+carmen run masked_softmax --model <your proxy's name for the Claude model>
+# if the proxy strips structured outputs: export CARMEN_STRUCTURED=0
+```
+
 | command | what it does |
 |---|---|
 | `carmen ops` | list the ops the judge knows |

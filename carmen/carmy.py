@@ -8,6 +8,7 @@ Carmy has no tools, so it cannot touch the judge; it can only return kernel text
 from __future__ import annotations
 
 import json
+import os
 
 from .backends import Kernel
 
@@ -115,21 +116,50 @@ class CarmyError(RuntimeError):
     pass
 
 
+def via_litellm() -> bool:
+    return bool(os.environ.get("LITELLM_API_KEY"))
+
+
 def _client():
+    """Direct to Anthropic by default. Set LITELLM_API_KEY (and LITELLM_BASE_URL) to go
+    through a LiteLLM proxy instead; it serves the same Messages API at /v1/messages."""
     import anthropic
+    if via_litellm():
+        key = os.environ["LITELLM_API_KEY"]
+        base = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
+        return anthropic.Anthropic(api_key=key, base_url=base,
+                                   default_headers={"Authorization": f"Bearer {key}"})
     return anthropic.Anthropic()
 
 
+def _request(system: str, prompt: str, schema: dict, model: str, effort: str) -> dict:
+    req = {
+        "model": model,
+        "max_tokens": 16000,
+        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": prompt}],
+        "output_config": {"effort": effort},
+    }
+    if os.environ.get("CARMEN_STRUCTURED", "1") != "0":
+        req["output_config"]["format"] = {"type": "json_schema", "schema": schema}
+    return req
+
+
 def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tuple[dict, dict]:
-    resp = _client().beta.messages.create(
-        model=model,
-        max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",
-        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": prompt}],
-        output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
-    )
+    import anthropic
+    client = _client()
+    req = _request(system, prompt, schema, model, effort)
+    try:
+        if via_litellm():
+            # Server-side refusal fallbacks are an Anthropic API feature; a LiteLLM proxy
+            # handles fallbacks with its own router config instead.
+            resp = client.messages.create(**req)
+        else:
+            resp = client.beta.messages.create(**req, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+    except anthropic.BadRequestError as e:
+        hint = (" If your proxy doesn't pass structured outputs through, set CARMEN_STRUCTURED=0."
+                if via_litellm() else "")
+        raise CarmyError(f"API rejected the request: {e.message}.{hint}") from e
     if resp.stop_reason == "refusal":
         raise CarmyError(f"model declined ({getattr(resp.stop_details, 'category', None)})")
     if resp.stop_reason == "max_tokens":
@@ -138,7 +168,19 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
     usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens,
              "cache_read_input_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
              "model": resp.model}
-    return json.loads(text), usage
+    return _parse_json(text), usage
+
+
+def _parse_json(text: str) -> dict:
+    """Structured outputs guarantee bare JSON. Without them (CARMEN_STRUCTURED=0), the model
+    may wrap it in a ```json fence; strip that, and fail loudly on anything else."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1].rsplit("```", 1)[0]
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError as e:
+        raise CarmyError(f"model did not return valid JSON: {text[:300]!r}") from e
 
 
 def parse(data: dict) -> tuple[Kernel, list[str]]:
