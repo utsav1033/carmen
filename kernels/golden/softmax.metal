@@ -6,7 +6,7 @@ uint tid  = thread_position_in_threadgroup.x;
 uint lane = thread_index_in_simdgroup;
 uint sg   = simdgroup_index_in_threadgroup;
 const int n = x_shape[1];
-const device T* xr = x + row * n;
+auto xr = x + row * n;       // auto: MLX passes small inputs as `constant`, large ones as `device`
 device T* o = out + row * n;
 threadgroup float shared[32];
 const uint n_sg = (TG + 31) / 32;
