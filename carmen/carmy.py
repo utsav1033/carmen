@@ -129,7 +129,8 @@ def route() -> str:
         name = "LITELLM_API_KEY"
     else:
         key = os.environ.get("ANTHROPIC_API_KEY", "")
-        where = f"Anthropic API{' at ' + os.environ['ANTHROPIC_BASE_URL'] if os.environ.get('ANTHROPIC_BASE_URL') else ''}"
+        base = os.environ.get("ANTHROPIC_BASE_URL")
+        where = f"proxy at {base}" if via_proxy() else "Anthropic API (api.anthropic.com)"
         name = "ANTHROPIC_API_KEY"
     shown = f"…{key[-4:]}" if len(key) > 8 else ("empty" if not key else "too short")
     return f"{where} · {name} {shown}"
@@ -137,6 +138,13 @@ def route() -> str:
 
 def via_litellm() -> bool:
     return bool(os.environ.get("LITELLM_API_KEY"))
+
+
+def via_proxy() -> bool:
+    """True when calls go through a proxy (LiteLLM env vars, or ANTHROPIC_BASE_URL pointing at a
+    non-Anthropic host). Proxies get plain Messages API requests, without Anthropic-only betas."""
+    base = os.environ.get("ANTHROPIC_BASE_URL", "")
+    return via_litellm() or (bool(base) and "api.anthropic.com" not in base)
 
 
 def _client():
@@ -169,8 +177,8 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
     client = _client()
     req = _request(system, prompt, schema, model, effort)
     try:
-        if via_litellm():
-            # Server-side refusal fallbacks are an Anthropic API feature; a LiteLLM proxy
+        if via_proxy():
+            # Server-side refusal fallbacks are an Anthropic API feature; a proxy
             # handles fallbacks with its own router config instead.
             resp = client.messages.create(**req)
         else:
@@ -179,7 +187,7 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
         raise CarmyAuthError(f"{route()} was rejected ({e.status_code}): {e.message}") from e
     except anthropic.BadRequestError as e:
         hint = (" If your proxy doesn't pass structured outputs through, set CARMEN_STRUCTURED=0."
-                if via_litellm() else "")
+                if via_proxy() else "")
         raise CarmyError(f"API rejected the request: {e.message}.{hint}") from e
     if resp.stop_reason == "refusal":
         raise CarmyError(f"model declined ({getattr(resp.stop_details, 'category', None)})")

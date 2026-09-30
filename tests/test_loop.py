@@ -111,3 +111,12 @@ def test_route_masks_the_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secretsecret1234")
     r = carmy.route()
     assert "…1234" in r and "secret" not in r
+
+
+def test_anthropic_base_url_proxy_is_detected(monkeypatch):
+    from carmen import carmy
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://llm.mycompany.dev")
+    assert carmy.via_proxy() and "proxy at https://llm.mycompany.dev" in carmy.route()
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    assert not carmy.via_proxy()
