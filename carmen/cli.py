@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import broken, judge, ops, ui
+from . import broken, dotenv, judge, ops, ui
 from .backends import Kernel
 from .carmy import DEFAULT_MODEL
 
@@ -176,6 +176,7 @@ def cmd_playbook(args) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="carmen", description="Let an LLM cook GPU kernels. Trust nothing it can't prove.")
     ap.add_argument("--backend", default="metal")
+    ap.add_argument("--env", default=".env", help="file of KEY=value settings to load (default: ./.env)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("ops", help="list ops").set_defaults(fn=cmd_ops)
@@ -219,6 +220,7 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_playbook)
 
     args = ap.parse_args(argv)
+    dotenv.load(args.env)
     return args.fn(args)
 
 

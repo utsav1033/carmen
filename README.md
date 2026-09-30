@@ -46,7 +46,7 @@ On an Apple Silicon Mac:
 ```bash
 git clone https://github.com/utsav1033/kernel-sahab && cd kernel-sahab
 pip install -e '.[metal,dev]'
-export ANTHROPIC_API_KEY=...        # or `ant auth login`
+cp .env.example .env               # put your ANTHROPIC_API_KEY (or LiteLLM key) in it
 
 carmen peak                          # measure your GPU's real memory bandwidth (cached)
 carmen broken softmax                # prove the judge works: it must kill every seeded bug
@@ -55,7 +55,9 @@ carmen run masked_softmax            # let Carmy cook
 carmen report runs/<id>
 ```
 
-**Going through a LiteLLM proxy?** Point carmen at it instead of Anthropic directly:
+**Keys and settings** live in `.env` (gitignored; see `.env.example`). carmen loads it on every command, and anything you `export` in your shell overrides it. Use `--env path/to/file` to load a different file.
+
+**Going through a LiteLLM proxy?** Point carmen at it instead of Anthropic directly (in `.env` or your shell):
 
 ```bash
 export LITELLM_API_KEY=sk-...                      # your LiteLLM key

@@ -75,3 +75,19 @@ def test_litellm_client_and_json_parsing(monkeypatch):
     assert carmy._parse_json('```json\n{"a": 1}\n```') == {"a": 1}
     monkeypatch.setenv("CARMEN_STRUCTURED", "0")
     assert "format" not in carmy._request("s", "p", {}, "m", "high")["output_config"]
+
+
+def test_dotenv_loads_without_overriding(tmp_path, monkeypatch):
+    from carmen import dotenv
+    f = tmp_path / ".env"
+    f.write_text('# comment\nexport CARMEN_T1="quoted value"\nCARMEN_T2=plain # note\nCARMEN_T3=from_file\n')
+    monkeypatch.delenv("CARMEN_T1", raising=False)
+    monkeypatch.delenv("CARMEN_T2", raising=False)
+    monkeypatch.setenv("CARMEN_T3", "from_shell")
+    dotenv.load(f)
+    import os
+    assert os.environ["CARMEN_T1"] == "quoted value"
+    assert os.environ["CARMEN_T2"] == "plain"
+    assert os.environ["CARMEN_T3"] == "from_shell"
+    monkeypatch.delenv("CARMEN_T1")
+    monkeypatch.delenv("CARMEN_T2")
