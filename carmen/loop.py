@@ -88,6 +88,10 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
             for i, f in enumerate(futures):
                 try:
                     results.append(f.result())
+                except carmy.CarmyAuthError as e:
+                    log("carmy_error", round=r, attempt=i, error=str(e))
+                    log("stopped", reason="the API rejected the key; fix it and rerun")
+                    raise
                 except Exception as e:  # a failed API call is logged, not hidden
                     log("carmy_error", round=r, attempt=i, error=str(e))
                     results.append(None)

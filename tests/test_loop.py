@@ -91,3 +91,23 @@ def test_dotenv_loads_without_overriding(tmp_path, monkeypatch):
     assert os.environ["CARMEN_T3"] == "from_shell"
     monkeypatch.delenv("CARMEN_T1")
     monkeypatch.delenv("CARMEN_T2")
+
+
+def test_auth_error_stops_the_run(tmp_path, monkeypatch):
+    import pytest
+    from carmen import carmy
+
+    def bad_key(op, **kw):
+        raise carmy.CarmyAuthError("rejected")
+
+    with pytest.raises(carmy.CarmyAuthError):
+        loop.run("softmax", rounds=3, k=2, adapter=FakeAdapter(), write_fn=bad_key, reflect_fn=no_reflect,
+                 peak=PEAK, runs_dir=tmp_path / "runs", memory_dir=tmp_path / "mem")
+
+
+def test_route_masks_the_key(monkeypatch):
+    from carmen import carmy
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secretsecret1234")
+    r = carmy.route()
+    assert "…1234" in r and "secret" not in r

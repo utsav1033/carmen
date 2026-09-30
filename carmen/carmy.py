@@ -117,6 +117,24 @@ class CarmyError(RuntimeError):
     pass
 
 
+class CarmyAuthError(CarmyError):
+    """The API rejected the credentials. Retrying can't help, so the run stops."""
+
+
+def route() -> str:
+    """Which endpoint and key Carmy will use, with the key masked, for the run banner."""
+    if via_litellm():
+        key = os.environ["LITELLM_API_KEY"]
+        where = f"LiteLLM at {os.environ.get('LITELLM_BASE_URL', 'http://localhost:4000')}"
+        name = "LITELLM_API_KEY"
+    else:
+        key = os.environ.get("ANTHROPIC_API_KEY", "")
+        where = f"Anthropic API{' at ' + os.environ['ANTHROPIC_BASE_URL'] if os.environ.get('ANTHROPIC_BASE_URL') else ''}"
+        name = "ANTHROPIC_API_KEY"
+    shown = f"…{key[-4:]}" if len(key) > 8 else ("empty" if not key else "too short")
+    return f"{where} · {name} {shown}"
+
+
 def via_litellm() -> bool:
     return bool(os.environ.get("LITELLM_API_KEY"))
 
@@ -157,6 +175,8 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
             resp = client.messages.create(**req)
         else:
             resp = client.beta.messages.create(**req, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+    except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
+        raise CarmyAuthError(f"{route()} was rejected ({e.status_code}): {e.message}") from e
     except anthropic.BadRequestError as e:
         hint = (" If your proxy doesn't pass structured outputs through, set CARMEN_STRUCTURED=0."
                 if via_litellm() else "")
