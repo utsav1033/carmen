@@ -9,7 +9,7 @@ from typing import Callable
 import numpy as np
 
 
-def time_pair(cand: Callable[[], None], base: Callable[[], None], warmup: int = 5, reps: int = 25):
+def time_pair(cand: Callable[[], None], base: Callable[[], None], warmup: int = 3, reps: int = 15):
     """Alternate candidate and baseline (ABBA order) so thermal drift hits both equally."""
     for _ in range(warmup):
         cand()

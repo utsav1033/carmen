@@ -18,7 +18,8 @@ from ..ops.base import Case
 from . import check, stats
 
 DETERMINISM_RUNS = 5
-INNER = 20  # launches per timed sample, so fixed per-call overhead doesn't dominate small kernels
+INNER = 20  # max launches per timed sample, so fixed per-call overhead doesn't dominate small kernels
+TIMING_MEMORY = 256 * 1024 * 1024  # cap on buffers one timed sample may allocate (GPU memory is your RAM)
 SHRINK_LADDER = [(1, 1), (1, 2), (1, 3), (1, 7), (1, 31), (1, 32), (1, 33), (1, 64), (1, 65),
                  (1, 255), (1, 256), (1, 257), (1, 1025), (3, 33), (2, 4097)]
 
@@ -103,14 +104,24 @@ def _size(label: str) -> int:
     return int(rows) * int(n)
 
 
+def _inner(op, rows: int, n: int, dt: str) -> int:
+    """Launches per sample: as many as fit the memory cap (the stock op allocates a few
+    intermediates per launch), at least 1, at most INNER."""
+    per_launch = op.bytes_moved(rows, n, dt) * 2
+    return max(1, min(INNER, TIMING_MEMORY // per_launch))
+
+
 def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps):
     rows_out = []
     for rows, n in shapes:
         for dt in dtypes:
             p = Prepared(op, adapter, Case("normal", rows, n, dt, rows * 31 + n, "timing"))
-            tc, tb = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=INNER),
-                                     adapter.baseline_launch(op, p.dev, inner=INNER))
-            tc, tb = tc / INNER, tb / INNER
+            k = _inner(op, rows, n, dt)
+            tc, tb = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=k),
+                                     adapter.baseline_launch(op, p.dev, inner=k))
+            tc, tb = tc / k, tb / k
+            if hasattr(adapter, "release"):
+                adapter.release()
             s, lo, hi = stats.speedup(tc, tb)
             gbps = op.bytes_moved(rows, n, dt) / float(np.median(tc)) / 1e9
             rows_out.append({"shape": [rows, n], "dtype": dt, "ms": float(np.median(tc)) * 1e3,
@@ -168,15 +179,18 @@ def evaluate(req: dict, adapter) -> dict:
     shapes = [tuple(s) for s in req.get("timing_shapes") or op.timing_shapes]
     dtypes = req.get("timing_dtypes", ["float32", "float16"])
     best = None
-    for cfg in passing:
-        t = _timing(adapter, op, built, cfg, shapes, dtypes, peak)
-        g = stats.geomean([r["speedup"] for r in t])
-        if best is None or g > best[1]:
-            best = (cfg, g, t)
+    # Pick the config on one representative shape, then time only the winner everywhere.
+    if len(passing) > 1:
+        probe = [shapes[len(shapes) // 2]]
+        pick = max(passing, key=lambda cfg: _timing(adapter, op, built, cfg, probe, ["float32"], peak)[0]["speedup"])
+    else:
+        pick = passing[0]
+    t = _timing(adapter, op, built, pick, shapes, dtypes, peak)
+    best = (pick, stats.geomean([r["speedup"] for r in t]), t)
     res["best_config"], res["speedup_geomean"], res["timing"] = best
-    res["default_config_speedup"] = (stats.geomean([r["speedup"] for r in _timing(
-        adapter, op, built, kernel.configs[0], shapes, dtypes, peak)])
-        if kernel.configs[0] != best[0] else best[1])
+    default = kernel.configs[0]
+    res["default_config_speedup"] = best[1] if default == best[0] or default not in passing else \
+        stats.geomean([r["speedup"] for r in _timing(adapter, op, built, default, shapes[:1], ["float32"], peak)])
     pcts = [r["pct_peak"] for r in best[2] if r["pct_peak"] is not None]
     res["pct_peak_min"] = min(pcts) if pcts else None
     # Faster than the memory system can move the bytes means the measurement is wrong

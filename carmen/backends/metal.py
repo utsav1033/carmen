@@ -80,6 +80,10 @@ class MetalAdapter:
             mx.eval(*[op.mlx_baseline(mx, dev_inputs) for _ in range(inner)])
         return go
 
+    def release(self) -> None:
+        """Hand MLX's cached buffers back to the OS between timing runs."""
+        (mx.clear_cache if hasattr(mx, "clear_cache") else mx.metal.clear_cache)()
+
     def measure_peak_gbps(self) -> float:
         n = 64 * 1024 * 1024  # 256 MB of float32
         kern = mx.fast.metal_kernel(name="carmen_copy", input_names=["inp"], output_names=["out"], source=COPY_KERNEL)
