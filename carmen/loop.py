@@ -5,7 +5,8 @@
       -> the judge runs every candidate (visible + fresh fuzz + corpus + secret hidden draw)
       -> keep the fastest verified kernel as champion
       -> failing fuzz inputs join the regression corpus; the playbook is credited by verdicts
-      -> next round Carmy gets the champion + its profile, or the best failure + its diagnosis
+      -> next round Carmy gets the champion + its per-shape profile (or the best failure + its
+         diagnosis), plus a ledger of everything already tried this run and how it scored
     stop at ~90% of measured peak bandwidth, after `patience` rounds without improvement, or at `rounds`.
 
 `mode="bon"` is the control arm: the same number of Carmy calls with no feedback,
@@ -92,7 +93,7 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         def one(i):
             return write_fn(op, model=model, effort=effort, chip=chip, peak=peak_gbps, playbook=pb_text,
                             champion=champion if learn else None, last=last_fail if learn else None,
-                            variant=i, k=k)
+                            variant=i, k=k, history=_ledger(attempts, champion) if learn else "")
 
         with ThreadPoolExecutor(max_workers=k) as pool:
             futures = [pool.submit(one, i) for i in range(k)]
@@ -157,7 +158,9 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
                 a["verdict"]["stage"] != "correctness",
                 sum(c["n_failures"] for c in a["verdict"].get("configs", [])) or 10**6))
 
-        if learn and round_attempts:
+        # Lessons come only from rounds that proved something: a new champion (the first verified
+        # kernel, or a faster one). A round that changed nothing has nothing new to teach.
+        if learn and improved:
             try:
                 proposals = reflect_fn(op, _round_summary(round_attempts, champion))
             except Exception as e:
@@ -166,7 +169,8 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
             verified = {a["id"] for a in round_attempts if a["verdict"]["correct"]}
             rejected = playbook.add(proposals, op.name, verified)
             playbook.save()
-            log("playbook_updated", round=r, proposed=len(proposals), rejected=[x[1] for x in rejected],
+            log("playbook_updated", round=r, proposed=len(proposals),
+                rejected=[{"text": p.get("text", ""), "reason": why} for p, why in rejected],
                 lessons=[l.__dict__ for l in playbook.lessons.values()])
 
         stale = 0 if improved else stale + 1
@@ -185,6 +189,31 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
     rr.save("summary.json", summary)
     log("run_finished", **{k_: v_ for k_, v_ in summary.items() if k_ != "run_dir"})
     return summary
+
+
+LEDGER_MAX = 12
+
+
+def _scores(v: dict) -> str:
+    return ", ".join(f"{r['shape'][0]}x{r['shape'][1]} {r['dtype'].replace('float', 'f')} {r['speedup']:.2f}x"
+                     for r in v.get("timing", []))
+
+
+def _ledger(attempts: list[dict], champion: dict | None) -> str:
+    """One line per earlier attempt this run: what it tried and what the judge measured."""
+    lines = []
+    for a in attempts[-LEDGER_MAX:]:
+        v = a["verdict"]
+        plan = " ".join((a["kernel"].get("plan") or "").split())[:240]
+        if v["correct"]:
+            tag = " (current champion)" if champion and a["id"] == champion["id"] else ""
+            res = f"verified, geomean {v['speedup_geomean']:.2f}x{tag}: {_scores(v)}"
+        else:
+            first = next((c["failures"][0] for c in v.get("configs", []) if c["failures"]), None)
+            why = "; ".join(first["patterns"]) if first else ((v.get("error") or "").splitlines() or [""])[0]
+            res = f"rejected at {v['stage']}: {why}"[:200]
+        lines.append(f"- {a['id']}: {plan}\n  -> {res}")
+    return "\n".join(lines)
 
 
 def _hidden_summary(v: dict) -> dict | None:

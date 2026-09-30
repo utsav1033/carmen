@@ -25,7 +25,7 @@ Generation is cheap now. **Trust is the bottleneck.** carmen is built around tha
 
 - **Carmy** (the model) writes the kernel. It's trusted to be smart and **never trusted to grade**. It has no tools; it can only return kernel text.
 - **The judge** is plain, deterministic Python. It knows what the op *means* (a float64 answer key, properties every correct answer has, where bugs hide), runs the kernel on the real GPU, and says **where** it's wrong, not just *that* it's wrong.
-- **The loop** gets from *correct* to *fast*: three Carmy drafts in parallel, the judge ranks them, the best becomes the champion, and each round attacks one bottleneck. It stops near the chip's measured memory bandwidth, the physical ceiling.
+- **The loop** gets from *correct* to *fast*: three Carmy drafts in parallel, the judge ranks them, the best becomes the champion, and each round attacks one bottleneck. Carmy sees the whole per-shape scorecard (a win on one shape that loses the others is thrown away) and a ledger of every idea already tried and how it scored, so rounds build on each other instead of repeating. Lessons are written only after a round that proved something. It stops near the chip's measured memory bandwidth, the physical ceiling.
 - **Memory** keeps only what the judge proved. Lessons are credited by verdicts, never by the model saying "that worked".
 
 ```mermaid

@@ -80,9 +80,10 @@ REFLECT_SYSTEM = """\
 You review one round of GPU kernel attempts and write down what was learned, for a future engineer who \
 will start from scratch. Only write a lesson when the judge's results show it: a failure that was fixed, \
 or a change that made a verified kernel measurably faster. Each lesson states a mechanism, the condition \
-where it applies, and the action. Never mention specific test sizes. Mark a lesson `chip` if it is about the \
+where it applies, and the action. You may name size regimes with powers of two ("rows longer than 4096"), \
+never exact test sizes. Mark a lesson `chip` if it is about the \
 hardware (memory access, SIMD, threadgroups) and would help any op, or `op` if it is about this operation's \
-math. Cite the attempt ids that prove it. Return at most 3 lessons; return none if nothing was proven.
+math. Cite the attempt ids that prove it, exactly as written (for example "0-1"). Return at most 3 lessons; return none if nothing was proven.
 """
 
 REFLECT_SCHEMA = {
@@ -197,7 +198,7 @@ def parse(data: dict) -> tuple[Kernel, list[str]]:
 
 
 def prompt(op, *, chip: str, peak: float | None, playbook: str, champion: dict | None,
-           last: dict | None, variant: int, k: int) -> str:
+           last: dict | None, variant: int, k: int, history: str = "") -> str:
     parts = [f"TASK: write a Metal kernel for `{op.name}` ({op.summary}).\n\n{op.contract}"]
     parts.append(f"CHIP: {chip}. Measured peak memory bandwidth: {peak:.0f} GB/s." if peak else f"CHIP: {chip}.")
     if playbook:
@@ -206,13 +207,18 @@ def prompt(op, *, chip: str, peak: float | None, playbook: str, champion: dict |
         parts.append("CURRENT BEST VERIFIED KERNEL:\n```metal\n" + champion["kernel"]["source"] + "\n```\n"
                      f"header:\n```metal\n{champion['kernel']['header']}\n```\n"
                      "Judge feedback on it:\n" + champion["feedback"])
-        parts.append("Make ONE structural change you expect to make it faster, keep it correct, and say in `plan` "
-                     "which bottleneck you are attacking and what speedup you expect.")
+        parts.append("Your score is the geomean speedup over EVERY shape and dtype in the table above. Speeding up "
+                     "one shape while slowing the others lowers the score, and the kernel is thrown away. Make ONE "
+                     "structural change you expect to raise the geomean without making any shape slower, keep it "
+                     "correct, and say in `plan` which bottleneck you are attacking and which shapes should gain.")
     elif last:
         parts.append("PREVIOUS ATTEMPT (rejected):\n```metal\n" + last["kernel"]["source"] + "\n```\n"
                      "Judge feedback:\n" + last["feedback"] + "\n\nFix the problem the judge located.")
     else:
         parts.append("Write a correct, fast kernel.")
+    if history:
+        parts.append("ALREADY TRIED THIS RUN (the judge's results; do not repeat an idea that lost, "
+                     "build on what won):\n" + history)
     if k > 1:
         parts.append(f"You are attempt {variant + 1} of {k} running in parallel. {VARIANTS[variant % len(VARIANTS)]}")
     return "\n\n".join(parts)

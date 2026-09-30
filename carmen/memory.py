@@ -38,14 +38,25 @@ class Lesson:
 
 
 def lint(text: str) -> str | None:
-    """Reject lessons that smuggle in test shapes or are too vague to act on."""
+    """Reject lessons that smuggle in test shapes or are too vague to act on.
+
+    Powers of two are allowed: "rows longer than 4096" is a size regime, and TG=256 is hardware.
+    Other exact sizes (4097, 1000) are memorized test shapes. Hidden off-grid sizes catch any
+    lesson that overfits anyway, so this only filters the obvious cases."""
     if len(text) < 25:
         return "too short to be actionable"
     if len(text) > 400:
         return "too long; one mechanism per lesson"
-    if re.search(r"\b\d{3,}\b", text) and not re.search(r"\b(32|64|128|256|512|1024)\b", text):
-        return "mentions a specific size; lessons must be conditions, not memorized shapes"
+    for num in re.findall(r"\b\d{3,}\b", text):
+        v = int(num)
+        if v & (v - 1):
+            return f"mentions a specific size ({num}); lessons must be conditions, not memorized shapes"
     return None
+
+
+def _attempt_ids(evidence) -> list[str]:
+    """The reflector may write "attempt 0-1" or "0-1 and 0-2"; keep just the ids."""
+    return [m for e in evidence for m in re.findall(r"\d+-\d+", str(e))]
 
 
 class Playbook:
@@ -104,7 +115,7 @@ class Playbook:
         existing = {l.text.lower() for l in self.lessons.values()}
         added = 0
         for p in proposals:
-            evidence = [e for e in p.get("evidence", []) if e in verified_attempts]
+            evidence = [e for e in _attempt_ids(p.get("evidence", [])) if e in verified_attempts]
             reason = lint(p.get("text", ""))
             if reason is None and not evidence:
                 reason = "no evidence: must cite an attempt the judge verified"

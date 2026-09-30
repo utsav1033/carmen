@@ -135,12 +135,15 @@ def cmd_run(args) -> int:
             mark = ui.OK if d["correct"] else ui.BAD
             print(f"     {mark} {d['stage']}{speed}{ui.s(hid, 'grey')}")
         elif t == "champion":
-            print(f"  {ui.s('★ new champion', 'magenta', 'bold')} {d['attempt']}  {ui.speed(d['speedup'])}")
+            print(f"  {ui.s('★ new champion', 'green', 'bold')} {d['attempt']}  {ui.speed(d['speedup'])}")
         elif t == "corpus_grew":
             print(ui.s(f"  + {len(d['added'])} failing input(s) saved to the regression corpus", "grey"))
         elif t == "playbook_updated" and d["proposed"]:
             kept = d["proposed"] - len(d["rejected"])
             print(ui.s(f"  playbook: {kept} lesson(s) kept, {len(d['rejected'])} rejected", "grey"))
+            for x in d["rejected"]:
+                why = x["reason"] if isinstance(x, dict) else x
+                print(ui.s(f"    rejected: {why}", "grey"))
         elif t in ("carmy_error", "reflect_error"):
             print(f"  {ui.WARN} {t}: {d['error'][:200]}")
         elif t == "stopped":

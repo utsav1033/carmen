@@ -108,3 +108,34 @@ def test_anthropic_base_url_proxy_is_detected(monkeypatch):
     assert carmy.via_proxy()
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
     assert not carmy.via_proxy()
+
+
+def test_lint_allows_size_regimes_but_not_exact_sizes():
+    assert lint("For rows longer than 4096 elements, split the row across more threads per threadgroup.") is None
+    assert "4097" in lint("When rows have 4097 elements, add a special loop for the ragged tail.")
+
+
+def test_playbook_accepts_evidence_written_as_prose(tmp_path):
+    pb = Playbook(tmp_path / "pb.json")
+    pb.add([{"text": "Subtract the row max before exponentiating so large inputs cannot overflow.",
+             "kind": "op", "evidence": ["attempt 0-1"]}], "softmax", verified_attempts={"0-1"})
+    assert pb.lessons and next(iter(pb.lessons.values())).evidence == ["0-1"]
+
+
+def test_carmy_sees_what_was_already_tried(tmp_path, monkeypatch):
+    monkeypatch.setattr(ops.get("softmax"), "timing_shapes", ((64, 1000),))
+    seen = []
+    base = scripted_carmy(["good", "zeros", "zeros", "zeros"])
+
+    def write(op, **kw):
+        seen.append(kw["history"])
+        return base(op, **kw)
+
+    reflected = []
+    loop.run("softmax", rounds=2, k=2, patience=5, adapter=FakeAdapter(), write_fn=write,
+             reflect_fn=lambda op, s: reflected.append(s) or [], peak=PEAK,
+             runs_dir=tmp_path / "runs", memory_dir=tmp_path / "mem")
+    assert seen[0] == "" and seen[1] == ""
+    assert "0-0" in seen[2] and "verified" in seen[2] and "64x1000 f32" in seen[2]
+    assert "0-1" in seen[2] and "rejected" in seen[2]
+    assert len(reflected) == 1  # round 0 found the first champion; round 1 proved nothing
