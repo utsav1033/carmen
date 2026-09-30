@@ -181,6 +181,42 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_timings(args) -> int:
+    """Where did the time go? Model calls vs judging vs reflection, from the run's own event log."""
+    from .events import read_events
+    runs = sorted(Path(args.runs).iterdir()) if not args.run else [Path(args.run)]
+    run = [r for r in runs if (r / "events.jsonl").exists()][-1]
+    ev = read_events(run)
+    ui.banner(f"timings · {run.name}")
+    rows, totals = [], {"model (Carmy)": 0.0, "judge": 0.0, "reflect": 0.0}
+    t_round = t_judge = t_reflect = None
+    for e in ev:
+        if e["type"] == "round_started":
+            t_round = e["t"]
+        elif e["type"] == "attempt_submitted":
+            if t_round is not None:
+                dt = e["t"] - t_round
+                totals["model (Carmy)"] += dt
+                rows.append([f"round {e['round']}", "Carmy writing 3 drafts (parallel)", f"{dt:6.1f} s"])
+                t_round = None
+            t_judge = e["t"]
+        elif e["type"] == "judge_result" and t_judge is not None:
+            dt = e["t"] - t_judge
+            totals["judge"] += dt
+            rows.append(["", f"judge {e['attempt']} ({e['stage']})", f"{dt:6.1f} s"])
+            t_reflect = e["t"]
+        elif e["type"] in ("playbook_updated", "reflect_error") and t_reflect is not None:
+            dt = e["t"] - t_reflect
+            totals["reflect"] += dt
+            rows.append(["", "reflector (lessons)", f"{dt:6.1f} s"])
+            t_reflect = None
+    ui.table(["", "step", "time"], rows, align="llr")
+    ui.rule()
+    total = ev[-1]["t"] - ev[0]["t"]
+    print("  ".join(f"{k}: {ui.s(f'{v:.0f} s', 'bold')}" for k, v in totals.items()) + f"   total: {total:.0f} s")
+    return 0
+
+
 def cmd_playbook(args) -> int:
     from .memory import Playbook
     ui.banner("playbook")
@@ -240,6 +276,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("report", help="summarize a run")
     p.add_argument("run")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("timings", help="where a run spent its time (model vs judge)")
+    p.add_argument("run", nargs="?", help="run directory (default: the latest)")
+    p.add_argument("--runs", default="runs")
+    p.set_defaults(fn=cmd_timings)
 
     p = sub.add_parser("playbook", help="show learned lessons")
     p.add_argument("--memory", default="memory")
