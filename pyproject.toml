@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "A self-correcting harness that gets LLMs to write fast GPU kernels you can actually trust."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.26", "anthropic>=1.0"]
+dependencies = ["numpy>=1.26", "anthropic>=1.0", "textual>=0.80"]
 
 [project.optional-dependencies]
 metal = ["mlx>=0.25"]

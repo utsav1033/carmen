@@ -66,8 +66,11 @@ carmen run masked_softmax --model <your proxy's name for the Claude model>
 # if the proxy strips structured outputs: export CARMEN_STRUCTURED=0
 ```
 
+Or just run **`carmen`** with no arguments to open the terminal app: kernels and runs on the left, syntax-highlighted Metal in the middle, verdict, speed vs MLX, % of peak and what Carmy saw on the right. Keys: `j` judge · `i` improve with Carmy · `r` cook · `b` test the judge · `q` quit.
+
 | command | what it does |
 |---|---|
+| `carmen` / `carmen ui` | the terminal app |
 | `carmen ops` | list the ops the judge knows |
 | `carmen peak` | copy-kernel bandwidth, used as the roofline for every speed claim |
 | `carmen judge <op> <file>` | judge a kernel you wrote; `--tg 128 --tg 256` sweeps threadgroup sizes, `--hidden` adds a secret draw |
@@ -140,6 +143,7 @@ A **chip** is one file in `carmen/backends/`: `build`, `upload`, `run`, `launch`
 
 ```
 carmen/
+  tui.py        the terminal app (Textual): browse, judge, improve, cook
   ops/          what each op means: reference, invariants, generators (chip-independent)
   backends/     how to compile, run and time on a chip (metal.py is the only Metal-aware file)
   judge/        gates, tolerance, diagnosis, timing stats; worker.py is the GPU-side process

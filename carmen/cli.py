@@ -35,6 +35,12 @@ def _verdict_line(v: dict) -> str:
     return f"{ui.OK} verified"
 
 
+def cmd_ui(args) -> int:
+    from .tui import main as tui_main
+    tui_main(args.backend, args.runs, args.memory, args.model)
+    return 0
+
+
 def cmd_ops(args) -> int:
     ui.banner("ops")
     ui.table(["op", "what", "visible tests"], [[ui.s(o.name, "bold"), o.summary, len(o.visible)] for o in ops.OPS.values()])
@@ -192,7 +198,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="carmen", description="Let an LLM cook GPU kernels. Trust nothing it can't prove.")
     ap.add_argument("--backend", default="metal")
     ap.add_argument("--env", default=".env", help="file of KEY=value settings to load (default: ./.env)")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("ui", help="the terminal app (default when no command is given)")
+    p.add_argument("--runs", default="runs")
+    p.add_argument("--memory", default="memory")
+    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.set_defaults(fn=cmd_ui)
 
     sub.add_parser("ops", help="list ops").set_defaults(fn=cmd_ops)
     p = sub.add_parser("peak", help="measure memory bandwidth")
@@ -236,6 +248,8 @@ def main(argv=None) -> int:
 
     args = ap.parse_args(argv)
     dotenv.load(args.env)
+    if args.cmd is None:
+        args = ap.parse_args(["--backend", args.backend, "--env", args.env, "ui"])
     return args.fn(args)
 
 
