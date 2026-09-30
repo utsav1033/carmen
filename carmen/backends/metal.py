@@ -40,7 +40,7 @@ class MetalAdapter:
     def upload(self, inputs):
         return {k: mx.array(v) for k, v in inputs.items()}
 
-    def _call(self, built, op, config, dev_inputs, rows, n, dtype):
+    def _call(self, built, op, config, dev_inputs, rows, n, dtype, poison: bool = True):
         tg = config["TG"]
         template = [("T", _DTYPES[dtype])] + [(k, v) for k, v in config.items()]
         (out,) = built(
@@ -52,7 +52,9 @@ class MetalAdapter:
             threadgroup=(tg, 1, 1),
             output_shapes=[(rows * n + PAD,)],
             output_dtypes=[_DTYPES[dtype]],
-            init_value=float("nan"),
+            # Correctness runs pre-fill the output with NaN so unwritten elements show up.
+            # Timing runs must not: the fill is an extra full write the stock op never pays.
+            **({"init_value": float("nan")} if poison else {}),
         )
         return out
 
@@ -60,7 +62,7 @@ class MetalAdapter:
         # `inner` launches share one eval, so per-call Python/dispatch overhead is amortized
         # and the timer sees GPU time, not host time.
         def go():
-            mx.eval(*[self._call(built, op, config, dev_inputs, rows, n, dtype) for _ in range(inner)])
+            mx.eval(*[self._call(built, op, config, dev_inputs, rows, n, dtype, poison=False) for _ in range(inner)])
         return go
 
     def run(self, built, op, config, dev_inputs, rows, n, dtype):

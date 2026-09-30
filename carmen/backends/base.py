@@ -79,7 +79,8 @@ class Adapter(Protocol):
 
     def launch(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str,
                inner: int = 1) -> Callable[[], None]:
-        """Return a function that runs the kernel `inner` times back to back and blocks until done."""
+        """Return a function that runs the kernel `inner` times back to back and blocks until done.
+        For timing only: must not add work the stock op doesn't do (e.g. no NaN pre-fill)."""
 
     def run(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str) -> np.ndarray:
         """Run once; return the flat output (rows * n + PAD elements), NaN-poisoned before launch."""
