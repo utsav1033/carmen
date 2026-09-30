@@ -59,6 +59,19 @@ carmen report runs/<id>
 
 **Using an Anthropic-compatible proxy?** Set `ANTHROPIC_BASE_URL` next to your key in `.env`. carmen then sends plain Messages API requests (no Anthropic-only extras) and never prints the URL. If the proxy strips structured outputs, add `CARMEN_STRUCTURED=0`.
 
+### The app
+
+Run **`carmen`** with no arguments. It follows one path:
+
+1. **Home:** pick an op. Each shows its best verified result so far.
+2. **Kitchen:** watch it cook live. A stage rail (draft → judge → improve → plated), three draft cards that go *writing → judging → ✓ verified 1.31× / ✗ tail bug at n=33*, what the judge said, and the champion with its speed by round. `s` stops after the current round.
+3. **Inspect:** open any card for the code beside its verdict: speed per shape, % of peak, hidden results, and exactly what Carmy was told. `d` diffs it against the champion, `i` improves from it, `e` exports the `.metal`.
+4. **Plated:** the result. Best kernel, speed vs MLX on seen and unseen sizes, and how many wrong kernels a naive check would have passed.
+
+`t` on the home screen shows the judge catching seeded bugs live; `h` opens history.
+
+### Commands
+
 | command | what it does |
 |---|---|
 | `carmen` / `carmen ui` | the terminal app |
