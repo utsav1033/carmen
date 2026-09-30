@@ -232,6 +232,7 @@ OptionList > .option-list--option-highlighted {{ background: #1c1c20; color: {WH
 OptionList:focus > .option-list--option-highlighted {{ background: #26262b; color: {WHITE}; text-style: bold; }}
 #ops {{ margin: 1 2 0 2; height: auto; max-height: 60%; }}
 #howto {{ margin: 1 4; color: {DIM}; }}
+.crumb {{ height: 1; margin: 0 2; }}
 #judgelog {{ height: 1fr; margin: 1 2 0 2; }}
 #rail {{ height: 3; padding: 1 2 0 2; }}
 #cards {{ height: auto; padding: 0 1; }}
@@ -264,6 +265,19 @@ class Header(Horizontal):
         return t
 
 
+FLOW = ("home", "cook", "inspect", "plated")
+
+
+def crumb(here: str) -> Static:
+    """Where you are in home > cook > inspect > plated, shown on every screen."""
+    t = Text("  ")
+    for i, step in enumerate(FLOW):
+        t.append(step, style=f"bold {WHITE}" if step == here else FAINT)
+        if i < len(FLOW) - 1:
+            t.append("  ›  ", style=EDGE)
+    return Static(t, classes="crumb")
+
+
 # ── home ─────────────────────────────────────────────────────────────────────────
 HOWTO = Text.assemble(
     ("enter", f"bold {WHITE}"),
@@ -275,11 +289,12 @@ HOWTO = Text.assemble(
 
 
 class HomeScreen(Screen):
-    BINDINGS = [Binding("enter", "cook", "cook"), Binding("t", "trust", "trust the judge"),
+    BINDINGS = [Binding("enter", "cook", "cook", priority=True), Binding("t", "trust", "trust the judge"),
                 Binding("h", "history", "history"), Binding("q", "app.quit", "quit")]
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield crumb("home")
         yield OptionList(id="ops")
         yield Static(HOWTO, id="howto")
         yield Footer()
@@ -360,6 +375,7 @@ class KitchenScreen(Screen):
         self.note = ""
 
     def compose(self) -> ComposeResult:
+        yield crumb("cook")
         yield Static(id="rail")
         with Horizontal(id="cards"):
             for i in range(self.k):
@@ -567,6 +583,7 @@ class InspectScreen(Screen):
         self.item, self.champion, self.showing_diff = item, champion, False
 
     def compose(self) -> ComposeResult:
+        yield crumb("inspect")
         with Horizontal():
             with VerticalScroll(id="code", classes="pane"):
                 yield Static(id="src")
@@ -650,6 +667,7 @@ class PlatedScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
+        yield crumb("plated")
         yield Static(id="plated", classes="pane")
         yield Footer()
 
