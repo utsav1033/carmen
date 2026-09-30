@@ -74,7 +74,7 @@ def cmd_judge(args) -> int:
 
 def cmd_broken(args) -> int:
     ui.banner(f"measuring the judge · {args.op}")
-    rows, killed, fooled = [], 0, 0
+    rows, killed, fooled, fooled_strict = [], 0, 0, 0
     g = judge.judge(args.op, broken.golden(args.op), backend=args.backend, skip_timing=True)
     print(f"golden kernel: {_verdict_line(g)}")
     if not g["correct"]:
@@ -85,21 +85,29 @@ def cmd_broken(args) -> int:
         v = judge.judge(args.op, kernel, backend=args.backend, skip_timing=True)
         dead = not v["correct"]
         killed += dead
-        naive = v.get("naive_pass")
+        naive, strict = v.get("naive_pass"), v.get("naive_pass_strict")
         fooled += bool(naive) and dead
+        fooled_strict += bool(strict) and dead
         where = ""
         if v.get("configs") and v["configs"][0]["failures"]:
             where = v["configs"][0]["failures"][0].get("where", "")
         elif v.get("error"):
             where = v["error"].splitlines()[0][:50]
         rows.append([m.name, ui.s(m.family, "grey"), ui.OK + " killed" if dead else ui.BAD + " SURVIVED",
-                     (ui.s("passes", "yellow") if naive else ui.s("fails", "grey")) if naive is not None else "—",
-                     ui.s(where[:60], "grey")])
-    ui.table(["mutant", "family", "carmen judge", "naive check", "where carmen located it"], rows)
+                     _naive(naive), _naive(strict),
+                     ui.s(where[:70], "grey")])
+    ui.table(["mutant", "family", "carmen judge", "naive 1e-2", "naive 1e-4", "where carmen located it"], rows)
     ui.rule()
-    print(f"carmen killed {ui.s(f'{killed}/{len(ms)}', 'bold')} seeded bugs. "
-          f"The KernelBench-style check would have accepted {ui.s(f'{fooled}/{len(ms)}', 'bold', 'yellow')} of them.")
+    print(f"carmen killed {ui.s(f'{killed}/{len(ms)}', 'bold')} seeded bugs. A KernelBench-style check "
+          f"(one shape, allclose) would have accepted {ui.s(f'{fooled}/{len(ms)}', 'bold', 'yellow')} at "
+          f"tolerance 1e-2 and {ui.s(f'{fooled_strict}/{len(ms)}', 'bold', 'yellow')} at 1e-4.")
     return 0 if killed == len(ms) else 1
+
+
+def _naive(passed) -> str:
+    if passed is None:
+        return "—"
+    return ui.s("passes", "yellow") if passed else ui.s("fails", "grey")
 
 
 def cmd_run(args) -> int:

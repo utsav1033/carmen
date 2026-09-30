@@ -149,7 +149,8 @@ def evaluate(req: dict, adapter) -> dict:
 
     naive = Prepared(op, adapter, op.naive)
     naive_out = adapter.run(built, op, kernel.configs[0], naive.dev, naive.case.rows, naive.case.n, naive.case.dtype)
-    res["naive_pass"] = check.naive_check(naive_out, naive.ref)
+    res["naive_pass"] = check.naive_check(naive_out, naive.ref, check.NAIVE_LOOSE)
+    res["naive_pass_strict"] = check.naive_check(naive_out, naive.ref, check.NAIVE_STRICT)
     res["full_pass_default_config"] = configs[0]["passed"]
 
     passing = [c["config"] for c in configs if c["passed"]]

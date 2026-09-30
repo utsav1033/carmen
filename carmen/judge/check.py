@@ -120,11 +120,17 @@ def locate(bad: np.ndarray) -> str:
         if k == rows:
             return "every element of every row"
         return f"entire rows ({k} of {rows}) are wrong while the others are right"
-    return f"{bad.mean():.1%} of elements, scattered across {int(bad_rows.sum())} of {rows} rows"
+    count = int(bad.sum())
+    share = f"{count} element{'s' if count > 1 else ''}" if bad.mean() < 0.001 else f"{bad.mean():.1%} of elements"
+    return f"{share}, scattered across {int(bad_rows.sum())} of {rows} rows"
 
 
-def naive_check(out_flat: np.ndarray, ref: np.ndarray) -> bool:
-    """What a KernelBench-style harness does: one shape, allclose with atol = rtol = 1e-2."""
+NAIVE_LOOSE = 1e-2   # KernelBench v0/v0.1 default, and its current fp16/bf16 default
+NAIVE_STRICT = 1e-4  # KernelBench's current fp32 default
+
+
+def naive_check(out_flat: np.ndarray, ref: np.ndarray, tol: float = NAIVE_LOOSE) -> bool:
+    """What a KernelBench-style harness does: one shape, allclose with atol = rtol = tol."""
     rows, n = ref.shape
     out = np.asarray(out_flat)[: rows * n].reshape(rows, n).astype(np.float64)
-    return bool(np.allclose(out, ref, atol=1e-2, rtol=1e-2))
+    return bool(np.allclose(out, ref, atol=tol, rtol=tol))

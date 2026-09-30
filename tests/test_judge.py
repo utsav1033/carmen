@@ -100,3 +100,14 @@ def test_reference_rows_sum_to_one():
         ref = spec.reference(spec.materialize(case))
         finite = np.isfinite(ref).all(-1)
         assert np.allclose(ref[finite].sum(-1), 1.0)
+
+
+def test_strict_naive_check_is_reported_and_harder_to_fool():
+    v = run("stores_through_fp16")
+    assert v["naive_pass"] and "naive_pass_strict" in v
+
+
+def test_locate_reports_counts_for_tiny_fractions():
+    bad = np.zeros((3, 5000), bool)
+    bad[1, 17] = True
+    assert "1 element," in check.locate(bad)
