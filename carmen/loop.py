@@ -51,7 +51,7 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         memory_dir: Path = Path("memory"), patience: int = 2, adapter=None,
         write_fn: Callable | None = None, reflect_fn: Callable | None = None,
         peak: dict | None = None, on_event: Callable[[str, dict], None] | None = None,
-        start: dict | None = None) -> dict:
+        start: dict | None = None, should_stop: Callable[[], bool] | None = None) -> dict:
     """`start` seeds the loop with an existing kernel ({id, kernel, verdict, feedback}): a verified
     one becomes the champion to improve, a failing one becomes the attempt to repair."""
     op = ops.get(op_name)
@@ -70,7 +70,7 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         emit(t, d)
 
     log("run_started", op=op.name, mode=mode, model=model, effort=effort, rounds=rounds, k=k,
-        chip=chip, peak_gbps=peak_gbps, backend=backend)
+        chip=chip, peak_gbps=peak_gbps, backend=backend, run_dir=str(rr.dir))
     champion, last_fail, stale, attempts = None, None, 0, []
     if start is not None:
         if start["verdict"].get("correct"):
@@ -80,6 +80,9 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         log("started_from", source=start["id"], correct=bool(start["verdict"].get("correct")))
 
     for r in range(rounds):
+        if should_stop and should_stop():
+            log("stopped", reason="stopped by you")
+            break
         round_seed, hidden_seed = secrets.randbits(31), secrets.randbits(31)
         rr.save(f"secrets/round-{r}.json", {"hidden_seed": hidden_seed})  # never shown to Carmy
         shown = playbook.shown(op.name) if learn else []

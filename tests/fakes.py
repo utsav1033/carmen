@@ -96,14 +96,14 @@ class FakeAdapter:
             out[rows * n] = 0
         return out
 
-    def launch(self, built, op, config, dev, rows, n, dtype):
-        return lambda: self.run(built, op, config, dev, rows, n, dtype)
+    def launch(self, built, op, config, dev, rows, n, dtype, inner=1):
+        return lambda: [self.run(built, op, config, dev, rows, n, dtype) for _ in range(inner)]
 
     def baseline(self, op, dev):
         return lambda: good(op.name, dev, {}).astype(dev["x"].dtype)
 
-    def baseline_launch(self, op, dev):
-        return lambda: self.baseline(op, dev)()
+    def baseline_launch(self, op, dev, inner=1):
+        return lambda: [self.baseline(op, dev)() for _ in range(inner)]
 
     def measure_peak_gbps(self):
         return 100.0

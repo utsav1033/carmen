@@ -18,6 +18,7 @@ from ..ops.base import Case
 from . import check, stats
 
 DETERMINISM_RUNS = 5
+INNER = 20  # launches per timed sample, so fixed per-call overhead doesn't dominate small kernels
 SHRINK_LADDER = [(1, 1), (1, 2), (1, 3), (1, 7), (1, 31), (1, 32), (1, 33), (1, 64), (1, 65),
                  (1, 255), (1, 256), (1, 257), (1, 1025), (3, 33), (2, 4097)]
 
@@ -107,8 +108,9 @@ def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps):
     for rows, n in shapes:
         for dt in dtypes:
             p = Prepared(op, adapter, Case("normal", rows, n, dt, rows * 31 + n, "timing"))
-            tc, tb = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt),
-                                     adapter.baseline_launch(op, p.dev))
+            tc, tb = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=INNER),
+                                     adapter.baseline_launch(op, p.dev, inner=INNER))
+            tc, tb = tc / INNER, tb / INNER
             s, lo, hi = stats.speedup(tc, tb)
             gbps = op.bytes_moved(rows, n, dt) / float(np.median(tc)) / 1e9
             rows_out.append({"shape": [rows, n], "dtype": dt, "ms": float(np.median(tc)) * 1e3,
@@ -177,6 +179,9 @@ def evaluate(req: dict, adapter) -> dict:
         if kernel.configs[0] != best[0] else best[1])
     pcts = [r["pct_peak"] for r in best[2] if r["pct_peak"] is not None]
     res["pct_peak_min"] = min(pcts) if pcts else None
+    # Faster than the memory system can move the bytes means the measurement is wrong
+    # (or the kernel skipped work): never report it as a speedup without a flag.
+    res["suspect_timing"] = any(p > 1.05 for p in pcts)
 
     if req.get("hidden"):
         res["stage"] = "hidden"

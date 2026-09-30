@@ -56,9 +56,11 @@ class MetalAdapter:
         )
         return out
 
-    def launch(self, built, op, config, dev_inputs, rows, n, dtype):
+    def launch(self, built, op, config, dev_inputs, rows, n, dtype, inner: int = 1):
+        # `inner` launches share one eval, so per-call Python/dispatch overhead is amortized
+        # and the timer sees GPU time, not host time.
         def go():
-            mx.eval(self._call(built, op, config, dev_inputs, rows, n, dtype))
+            mx.eval(*[self._call(built, op, config, dev_inputs, rows, n, dtype) for _ in range(inner)])
         return go
 
     def run(self, built, op, config, dev_inputs, rows, n, dtype):
@@ -73,9 +75,9 @@ class MetalAdapter:
             return np.array(y)
         return go
 
-    def baseline_launch(self, op, dev_inputs):
+    def baseline_launch(self, op, dev_inputs, inner: int = 1):
         def go():
-            mx.eval(op.mlx_baseline(mx, dev_inputs))
+            mx.eval(*[op.mlx_baseline(mx, dev_inputs) for _ in range(inner)])
         return go
 
     def measure_peak_gbps(self) -> float:

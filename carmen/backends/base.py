@@ -77,8 +77,9 @@ class Adapter(Protocol):
     def upload(self, inputs: dict[str, np.ndarray]):
         """Move numpy inputs to the device once, so timing excludes transfers."""
 
-    def launch(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str) -> Callable[[], None]:
-        """Return a function that runs the kernel once and blocks until it finishes."""
+    def launch(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str,
+               inner: int = 1) -> Callable[[], None]:
+        """Return a function that runs the kernel `inner` times back to back and blocks until done."""
 
     def run(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str) -> np.ndarray:
         """Run once; return the flat output (rows * n + PAD elements), NaN-poisoned before launch."""
@@ -86,8 +87,8 @@ class Adapter(Protocol):
     def baseline(self, op, dev_inputs) -> Callable[[], np.ndarray]:
         """Return a function that runs the stock library op, blocks, and returns its output."""
 
-    def baseline_launch(self, op, dev_inputs) -> Callable[[], None]:
-        """Return a function that runs the stock library op once and blocks (for timing)."""
+    def baseline_launch(self, op, dev_inputs, inner: int = 1) -> Callable[[], None]:
+        """Return a function that runs the stock library op `inner` times and blocks (for timing)."""
 
     def measure_peak_gbps(self) -> float:
         """Practical memory bandwidth from a copy kernel."""
