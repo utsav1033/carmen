@@ -1,0 +1,24 @@
+[project]
+name = "carmen"
+version = "0.1.0"
+description = "A self-correcting harness that gets LLMs to write fast GPU kernels you can actually trust."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "anthropic>=1.0"]
+
+[project.optional-dependencies]
+metal = ["mlx>=0.25"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+carmen = "carmen.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["carmen*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
