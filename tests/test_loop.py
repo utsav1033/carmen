@@ -67,11 +67,8 @@ def test_lint_allows_hardware_numbers():
     assert lint("Use a threadgroup of 256 threads with simd_sum reductions for long rows.") is None
 
 
-def test_litellm_client_and_json_parsing(monkeypatch):
+def test_json_parsing_and_structured_toggle(monkeypatch):
     from carmen import carmy
-    monkeypatch.setenv("LITELLM_API_KEY", "sk-test")
-    monkeypatch.setenv("LITELLM_BASE_URL", "http://proxy:4000")
-    assert carmy.via_litellm() and str(carmy._client().base_url).startswith("http://proxy:4000")
     assert carmy._parse_json('```json\n{"a": 1}\n```') == {"a": 1}
     monkeypatch.setenv("CARMEN_STRUCTURED", "0")
     assert "format" not in carmy._request("s", "p", {}, "m", "high")["output_config"]
@@ -105,18 +102,9 @@ def test_auth_error_stops_the_run(tmp_path, monkeypatch):
                  peak=PEAK, runs_dir=tmp_path / "runs", memory_dir=tmp_path / "mem")
 
 
-def test_route_masks_the_key(monkeypatch):
-    from carmen import carmy
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secretsecret1234")
-    r = carmy.route()
-    assert "…1234" in r and "secret" not in r
-
-
 def test_anthropic_base_url_proxy_is_detected(monkeypatch):
     from carmen import carmy
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://llm.mycompany.dev")
-    assert carmy.via_proxy() and "proxy at https://llm.mycompany.dev" in carmy.route()
+    assert carmy.via_proxy()
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
     assert not carmy.via_proxy()

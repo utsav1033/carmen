@@ -37,6 +37,7 @@ from .backends import Kernel
 BG, PANEL, EDGE, EDGE_HI = "#0c0d11", "#111218", "#262235", "#8f76d6"
 INK, DIM, FAINT = "#e8e6ef", "#8b8a9b", "#4d4b5c"
 GREEN, PURPLE, RED, AMBER = "#7ee2a8", "#b39afc", "#ff7b8a", "#f2c46d"
+WHITE, SHADE = "#ffffff", "#5c5c66"
 
 LOGO = [
     " ██████╗ █████╗ ██████╗ ███╗   ███╗███████╗███╗   ██╗",
@@ -49,11 +50,11 @@ LOGO = [
 
 
 def logo() -> Text:
-    """Block faces in white, box-drawing edges in muted purple: reads as extruded 3D type."""
+    """Solid white faces with a soft grey edge underneath: reads as extruded 3D type."""
     t = Text()
     for i, line in enumerate(LOGO):
         for ch in line:
-            t.append(ch, style=f"bold {INK}" if ch == "█" else PURPLE if ch != " " else "")
+            t.append(ch, style=f"bold {WHITE}" if ch == "█" else SHADE if ch != " " else "")
         if i < len(LOGO) - 1:
             t.append("\n")
     return t
@@ -268,7 +269,7 @@ class Carmen(App):
         lines = Text()
         lines.append("let the model cook. trust nothing it can't prove.\n\n", style=f"italic {INK}")
         lines.append("gpu    ", style=FAINT).append(gpu + "\n", style=INK)
-        lines.append("model  ", style=FAINT).append(f"{self.model} via {carmy.route()}\n", style=INK)
+        lines.append("model  ", style=FAINT).append(f"{self.model}\n", style=INK)
         lines.append("runs   ", style=FAINT).append(f"{len(runs)}", style=f"bold {PURPLE}")
         for op_name, s in best.items():
             lines.append("   best ", style=FAINT).append(f"{op_name} ", style=INK).append(f"{s:.2f}×", style=f"bold {GREEN}")

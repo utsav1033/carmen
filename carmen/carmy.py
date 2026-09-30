@@ -121,41 +121,16 @@ class CarmyAuthError(CarmyError):
     """The API rejected the credentials. Retrying can't help, so the run stops."""
 
 
-def route() -> str:
-    """Which endpoint and key Carmy will use, with the key masked, for the run banner."""
-    if via_litellm():
-        key = os.environ["LITELLM_API_KEY"]
-        where = f"LiteLLM at {os.environ.get('LITELLM_BASE_URL', 'http://localhost:4000')}"
-        name = "LITELLM_API_KEY"
-    else:
-        key = os.environ.get("ANTHROPIC_API_KEY", "")
-        base = os.environ.get("ANTHROPIC_BASE_URL")
-        where = f"proxy at {base}" if via_proxy() else "Anthropic API (api.anthropic.com)"
-        name = "ANTHROPIC_API_KEY"
-    shown = f"…{key[-4:]}" if len(key) > 8 else ("empty" if not key else "too short")
-    return f"{where} · {name} {shown}"
-
-
-def via_litellm() -> bool:
-    return bool(os.environ.get("LITELLM_API_KEY"))
-
-
 def via_proxy() -> bool:
-    """True when calls go through a proxy (LiteLLM env vars, or ANTHROPIC_BASE_URL pointing at a
-    non-Anthropic host). Proxies get plain Messages API requests, without Anthropic-only betas."""
+    """True when ANTHROPIC_BASE_URL points at an Anthropic-compatible proxy. Proxies get plain
+    Messages API requests, without Anthropic-only betas. The URL is never printed."""
     base = os.environ.get("ANTHROPIC_BASE_URL", "")
-    return via_litellm() or (bool(base) and "api.anthropic.com" not in base)
+    return bool(base) and "api.anthropic.com" not in base
 
 
 def _client():
-    """Direct to Anthropic by default. Set LITELLM_API_KEY (and LITELLM_BASE_URL) to go
-    through a LiteLLM proxy instead; it serves the same Messages API at /v1/messages."""
+    """Reads ANTHROPIC_API_KEY and, for a proxy, ANTHROPIC_BASE_URL from the environment (or .env)."""
     import anthropic
-    if via_litellm():
-        key = os.environ["LITELLM_API_KEY"]
-        base = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
-        return anthropic.Anthropic(api_key=key, base_url=base,
-                                   default_headers={"Authorization": f"Bearer {key}"})
     return anthropic.Anthropic()
 
 
@@ -184,7 +159,7 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
         else:
             resp = client.beta.messages.create(**req, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
-        raise CarmyAuthError(f"{route()} was rejected ({e.status_code}): {e.message}") from e
+        raise CarmyAuthError(f"the API rejected the key ({e.status_code}): {e.message}") from e
     except anthropic.BadRequestError as e:
         hint = (" If your proxy doesn't pass structured outputs through, set CARMEN_STRUCTURED=0."
                 if via_proxy() else "")

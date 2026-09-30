@@ -120,9 +120,8 @@ def cmd_run(args) -> int:
     from . import loop
     ui.banner(f"cooking · {args.op} · {args.mode}")
     peak = judge.peak_gbps(args.backend)
-    from .carmy import CarmyAuthError, route
+    from .carmy import CarmyAuthError
     print(ui.s(f"{peak['chip']} · {peak['peak_gbps']:.0f} GB/s peak · {args.model} · effort {args.effort}", "grey"))
-    print(ui.s(f"model calls via {route()}", "grey"))
 
     def on_event(t, d):
         if t == "round_started":
@@ -153,7 +152,7 @@ def cmd_run(args) -> int:
                            memory_dir=Path(args.memory), patience=args.patience, peak=peak, on_event=on_event)
     except CarmyAuthError as e:
         print(f"\n{ui.BAD} {e}")
-        print(ui.s("Check the key in .env (and that no old key is exported in your shell: echo $ANTHROPIC_API_KEY).", "grey"))
+        print(ui.s("Check ANTHROPIC_API_KEY (and ANTHROPIC_BASE_URL if you use a proxy) in .env, and that no old key is exported in your shell.", "grey"))
         return 2
     ui.rule("result")
     _print_summary(summary)

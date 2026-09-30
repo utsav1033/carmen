@@ -46,7 +46,7 @@ On an Apple Silicon Mac:
 ```bash
 git clone https://github.com/utsav1033/kernel-sahab && cd kernel-sahab
 pip install -e '.[metal,dev]'
-cp .env.example .env               # put your ANTHROPIC_API_KEY (or LiteLLM key) in it
+cp .env.example .env               # put your ANTHROPIC_API_KEY in it
 
 carmen peak                          # measure your GPU's real memory bandwidth (cached)
 carmen broken softmax                # prove the judge works: it must kill every seeded bug
@@ -57,16 +57,7 @@ carmen report runs/<id>
 
 **Keys and settings** live in `.env` (gitignored; see `.env.example`). carmen loads it on every command, and anything you `export` in your shell overrides it. Use `--env path/to/file` to load a different file.
 
-**Going through a LiteLLM proxy?** Point carmen at it instead of Anthropic directly (in `.env` or your shell):
-
-```bash
-export LITELLM_API_KEY=sk-...                      # your LiteLLM key
-export LITELLM_BASE_URL=http://localhost:4000      # your proxy
-carmen run masked_softmax --model <your proxy's name for the Claude model>
-# if the proxy strips structured outputs: export CARMEN_STRUCTURED=0
-```
-
-Or just run **`carmen`** with no arguments to open the terminal app: kernels and runs on the left, syntax-highlighted Metal in the middle, verdict, speed vs MLX, % of peak and what Carmy saw on the right. Keys: `j` judge · `i` improve with Carmy · `r` cook · `b` test the judge · `q` quit.
+**Using an Anthropic-compatible proxy?** Set `ANTHROPIC_BASE_URL` next to your key in `.env`. carmen then sends plain Messages API requests (no Anthropic-only extras) and never prints the URL. If the proxy strips structured outputs, add `CARMEN_STRUCTURED=0`.
 
 | command | what it does |
 |---|---|
