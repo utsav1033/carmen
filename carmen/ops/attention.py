@@ -63,8 +63,9 @@ def _uniform01(rng, rows, n, dtype, inner):
 
 
 def _large_scores(rng, rows, n, dtype, inner):
-    """Scores in the hundreds: exp overflows without the max subtraction or the online rescale."""
-    return _qkv(rng, rows, n, inner, dtype, qk_scale=4.0)
+    """Scores in the hundreds: exp(s) overflows float32 above s = 88.7, so a kernel without the
+    max subtraction (or the online rescale) breaks here and only here."""
+    return _qkv(rng, rows, n, inner, dtype, qk_scale=8.0)
 
 
 def _peaked(rng, rows, n, dtype, inner):

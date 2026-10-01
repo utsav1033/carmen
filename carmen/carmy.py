@@ -140,7 +140,8 @@ def _client():
 def _request(system: str, prompt: str, schema: dict, model: str, effort: str) -> dict:
     req = {
         "model": model,
-        "max_tokens": 16000,
+        # Hard kernels (attention) need long thinking plus long code: 16k truncated 7 of 9 calls.
+        "max_tokens": int(os.environ.get("CARMEN_MAX_TOKENS", "64000")),
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": prompt}],
         "output_config": {"effort": effort},
@@ -155,12 +156,16 @@ def _call(system: str, prompt: str, schema: dict, model: str, effort: str) -> tu
     client = _client()
     req = _request(system, prompt, schema, model, effort)
     try:
+        # Streamed: with a large max_tokens a single blocking request can outlast HTTP timeouts.
         if via_proxy():
             # Server-side refusal fallbacks are an Anthropic API feature; a proxy
             # handles fallbacks with its own router config instead.
-            resp = client.messages.create(**req)
+            with client.messages.stream(**req) as stream:
+                resp = stream.get_final_message()
         else:
-            resp = client.beta.messages.create(**req, betas=["server-side-fallback-2026-07-01"], fallbacks="default")
+            with client.beta.messages.stream(**req, betas=["server-side-fallback-2026-07-01"],
+                                             fallbacks="default") as stream:
+                resp = stream.get_final_message()
     except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
         raise CarmyAuthError(f"the API rejected the key ({e.status_code}): {e.message}") from e
     except anthropic.BadRequestError as e:

@@ -21,7 +21,7 @@
 | layernorm | 1 hand-tuned kernel | 0.95× | | |
 | rmsnorm | 1 hand-tuned kernel | 0.99× | | |
 | matmul | 1 heavily tuned kernel (Apple's matrix units) | **0.93×** | 0.92× | 0.86× |
-| attention | 1 heavily tuned fused kernel | *new: not run on Metal yet* | | |
+| attention | 1 heavily tuned fused kernel | 0.41× | 0.39× | 0.54× |
 
 Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fresh memory). `mx.compile` is MLX's graph compiler: it merges element-wise steps but can't merge them into softmax or rmsnorm.
 
@@ -238,7 +238,7 @@ tests/          the judge's logic, tested on a numpy stand-in for the GPU
 - ✅ Every speedup is reported twice: against plain MLX, and against `mx.compile` (MLX's graph compiler, which fuses element-wise ops). The second is the strongest baseline a user gets without writing Metal.
 - ⚠️ The improve rounds have not yet clearly beaten round 1 on real hardware. `carmen bench` measures that directly (loop vs best-of-N, same budget).
 - 🆕 matmul: a 2-D tiled launch, K-tail and square-only bugs, 8 seeded mutants. Golden kernel verified on an M4; 8/8 seeded bugs killed.
-- 🆕 attention: fused causal attention for one head, raced against MLX's `scaled_dot_product_attention`; 10 seeded bugs (causal off-by-one both ways, a missing KV-cache offset, the scale, the rescale). Tested against the numpy stand-in; first Metal run pending (`carmen broken attention`).
+- 🆕 attention: fused causal attention for one head, raced against MLX's `scaled_dot_product_attention`. First run on an M4: every kernel correct, best 0.41× (0.29× → 0.41× after feedback). The judge's own test found a hole in the judge: `no_max_subtraction` survived because the "large score" inputs peaked at 53, and `exp` only overflows above 88.7, so the bug changed nothing. The trap now produces scores in the hundreds, with a test that it really overflows.
 - 🔜 rope (wip), top-k (wip).
 
 ## Built on the shoulders of

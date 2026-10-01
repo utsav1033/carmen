@@ -188,3 +188,20 @@ def test_reflector_lesson_limit_fits_real_ideas():
     from carmen.memory import lint
     assert lint("Stage A and B tiles through threadgroup memory with " + "x" * 450) is None
     assert "too long" in lint("y" * 800)
+
+
+def test_attention_large_scores_really_overflow_exp():
+    """The trap must spring: without max subtraction, exp(score) overflows float32 (above 88.7).
+    It didn't at qk_scale 4, and the no_max_subtraction mutant survived on Metal."""
+    from carmen.ops.base import Case
+    spec = ops.get("attention")
+    for dt in ("float32", "float16", "bfloat16"):
+        inp = spec.materialize(Case("large_scores", 33, 64, dt, 61, "values", 65))
+        q, k = inp["q"].astype(np.float64), inp["k"].astype(np.float64)
+        assert (q @ k.T / 8).max() > 88.7
+
+
+def test_carmy_asks_for_enough_tokens_for_hard_kernels(monkeypatch):
+    from carmen import carmy
+    monkeypatch.delenv("CARMEN_MAX_TOKENS", raising=False)
+    assert carmy._request("s", "p", {}, "m", "high")["max_tokens"] >= 64000
