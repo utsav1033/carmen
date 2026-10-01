@@ -123,6 +123,8 @@ def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps, compiled: bool =
     """Time the kernel against the stock op. With `compiled`, also against mx.compile(stock op)."""
     rows_out = []
     for shape in shapes:
+        if len(shape) != op.dims:
+            raise ValueError(f"{op.name} timing shapes need {op.dims} dimensions, got {list(shape)}")
         rows, n, depth = (*shape, 0)[:3]
         for dt in dtypes:
             p = Prepared(op, adapter, Case("normal", rows, n, dt, rows * 31 + n, "timing", depth))

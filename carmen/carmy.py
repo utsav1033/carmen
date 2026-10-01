@@ -85,7 +85,7 @@ or a change that made a verified kernel measurably faster. Each lesson states a 
 where it applies, and the action. You may name size regimes with powers of two ("rows longer than 4096"), \
 never exact test sizes. Mark a lesson `chip` if it is about the \
 hardware (memory access, SIMD, threadgroups) and would help any op, or `op` if it is about this operation's \
-math. Cite the attempt ids that prove it, exactly as written (for example "0-1"). Return at most 3 lessons; return none if nothing was proven.
+math. Cite the attempt ids that prove it, exactly as written (for example "0-1"). Keep each lesson under 600 characters. Return at most 3 lessons; return none if nothing was proven.
 """
 
 REFLECT_SCHEMA = {

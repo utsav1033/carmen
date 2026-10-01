@@ -20,7 +20,8 @@
 | softmax | 1 hand-tuned kernel | 0.95× | | |
 | layernorm | 1 hand-tuned kernel | 0.95× | | |
 | rmsnorm | 1 hand-tuned kernel | 0.99× | | |
-| matmul | 1 heavily tuned kernel | *verified on Metal, not raced yet* | | |
+| matmul | 1 heavily tuned kernel (Apple's matrix units) | **0.93×** | 0.92× | 0.86× |
+| attention | 1 heavily tuned fused kernel | *new: not run on Metal yet* | | |
 
 Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fresh memory). `mx.compile` is MLX's graph compiler: it merges element-wise steps but can't merge them into softmax or rmsnorm.
 
@@ -56,6 +57,7 @@ Every row is a failure mode documented in the papers below or seen in practice. 
 | bf16, the dtype most models ship in | seen in practice | ✅ | bf16 cases in the visible battery, the fresh fuzz and the hidden draw |
 | empty tensors | seen in practice | ✅ by design | the harness never launches on an empty tensor |
 | a slow baseline making a kernel look fast | [KernelBench-Verified](https://github.com/facebookresearch/kernel_bench_verified) | ✅ | every speedup is reported against plain MLX **and** `mx.compile` |
+| attention: causal boundary off by one, a missing KV-cache offset, the softmax rescale | seen in practice | ✅ new | queries ≠ keys, head sizes 1 to 160, scores in the hundreds, values that ramp with the key index; 10 seeded bugs |
 | 32-bit index overflow on tensors over 2³¹ elements | seen in practice | ❌ | needs 8+ GB buffers per test; out of reach on most Macs |
 | non-contiguous or strided inputs | seen in practice | ❌ | inputs are always contiguous rows today |
 | matmul-style bugs: 2D tile edges, the K tail, indexing that's only right on square matrices | [Measuring the Checker](https://arxiv.org/abs/2609.22220) | ✅ new | non-square shapes on every tile edge, K from 1 to 4097, 8 seeded matmul bugs, all killed on an M4 |
@@ -231,12 +233,13 @@ tests/          the judge's logic, tested on a numpy stand-in for the GPU
 
 ## Status
 
-- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 49 tests, run on every push) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
+- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 53 tests, run on every push) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
 - ✅ On a real M4: the judge killed 12/12 seeded broken softmax kernels and 11/11 add_rmsnorm ones; every verified kernel so far is clean on hidden inputs.
 - ✅ Every speedup is reported twice: against plain MLX, and against `mx.compile` (MLX's graph compiler, which fuses element-wise ops). The second is the strongest baseline a user gets without writing Metal.
 - ⚠️ The improve rounds have not yet clearly beaten round 1 on real hardware. `carmen bench` measures that directly (loop vs best-of-N, same budget).
 - 🆕 matmul: a 2-D tiled launch, K-tail and square-only bugs, 8 seeded mutants. Golden kernel verified on an M4; 8/8 seeded bugs killed.
-- 🔜 attention (wip), rope (wip), top-k (wip).
+- 🆕 attention: fused causal attention for one head, raced against MLX's `scaled_dot_product_attention`; 10 seeded bugs (causal off-by-one both ways, a missing KV-cache offset, the scale, the rescale). Tested against the numpy stand-in; first Metal run pending (`carmen broken attention`).
+- 🔜 rope (wip), top-k (wip).
 
 ## Built on the shoulders of
 

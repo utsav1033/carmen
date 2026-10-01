@@ -66,7 +66,7 @@ def build_request(op_name: str, kernel: Kernel, *, round_seed: int | None = None
            "visible": [c.to_json() for c in visible], "peak_gbps": peak, "skip_timing": skip_timing}
     if hidden_seed is not None:
         req["hidden"] = [c.to_json() for c in hidden_cases(op, hidden_seed)]
-        req["hidden_timing_shapes"] = hidden_timing_shapes(hidden_seed, op.dims)
+        req["hidden_timing_shapes"] = hidden_timing_shapes(hidden_seed, op.dims, op.sizes)
     return req
 
 

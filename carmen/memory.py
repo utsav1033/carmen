@@ -21,6 +21,7 @@ SUCCESS, FAILURE, UNUSED = 1.0, -0.2, -0.2
 ETA_MIN = 0.05
 MAX_SHOWN = 20
 MAX_NEW_PER_ROUND = 3
+MAX_LESSON_CHARS = 700  # matmul-level ideas need room; the reflector is told this limit
 
 
 @dataclass
@@ -45,8 +46,8 @@ def lint(text: str) -> str | None:
     lesson that overfits anyway, so this only filters the obvious cases."""
     if len(text) < 25:
         return "too short to be actionable"
-    if len(text) > 400:
-        return "too long; one mechanism per lesson"
+    if len(text) > MAX_LESSON_CHARS:
+        return f"too long ({len(text)} chars, limit {MAX_LESSON_CHARS}); one mechanism per lesson"
     for num in re.findall(r"\b\d{3,}\b", text):
         v = int(num)
         if v & (v - 1):

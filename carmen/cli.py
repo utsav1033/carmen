@@ -84,6 +84,10 @@ def cmd_broken(args) -> int:
     rows, killed, fooled, fooled_strict = [], 0, 0, 0
     g = judge.judge(args.op, broken.golden(args.op), backend=args.backend, skip_timing=True)
     print(f"golden kernel: {_verdict_line(g)}")
+    if g.get("invalid_cases"):
+        # Inputs where stock MLX itself disagrees with the answer key are dropped, not graded.
+        print(ui.s(f"  {len(g['invalid_cases'])} input(s) dropped because stock MLX disagrees with the answer key: "
+                   f"{', '.join(g['invalid_cases'][:4])}", "yellow"))
     if not g["correct"]:
         print(f"{ui.WARN} the golden kernel fails, so the tests or the reference need fixing first:\n{judge.feedback(g)}")
         return 1

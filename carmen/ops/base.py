@@ -113,6 +113,9 @@ class OpSpec:
     # Minimum memory traffic and arithmetic for one launch: fn(rows, n, inner, itemsize) -> bytes / flops.
     bytes_fn: Callable | None = None
     flops_fn: Callable | None = None
+    # Op-specific size draws: fn(rng, purpose) -> (rows, n, inner), purpose in fuzz | hidden | timing.
+    # None = the generic draws below.
+    sizes: Callable | None = None
 
     def grid(self, rows: int, n: int, config: dict) -> tuple[tuple, tuple]:
         if self.launch:
@@ -159,7 +162,9 @@ def fuzz_cases(spec: OpSpec, seed: int, count: int = 8) -> list[Case]:
     out = []
     for i in range(count):
         kind = spec.fuzz_kinds[i % len(spec.fuzz_kinds)]
-        if spec.dims == 3:
+        if spec.sizes:
+            rows, n, inner = spec.sizes(rng, "fuzz")
+        elif spec.dims == 3:
             rows, n, inner = int(rng.integers(1, 160)), off_grid_n(rng, 2, 700), off_grid_n(rng, 2, 700)
         else:
             rows, n, inner = int(rng.integers(1, 48)), off_grid_n(rng, 2, 6000), 0
@@ -173,7 +178,9 @@ def hidden_cases(spec: OpSpec, secret_seed: int, count: int = 24) -> list[Case]:
     out = []
     for i in range(count):
         kind = spec.hidden_kinds[i % len(spec.hidden_kinds)]
-        if spec.dims == 3:
+        if spec.sizes:
+            rows, n, inner = spec.sizes(rng, "hidden")
+        elif spec.dims == 3:
             rows, n, inner = int(rng.integers(1, 256)), off_grid_n(rng, 3, 1200), off_grid_n(rng, 3, 1200)
         else:
             rows, n, inner = int(rng.integers(1, 64)), off_grid_n(rng, 3, 20000), 0
@@ -181,8 +188,10 @@ def hidden_cases(spec: OpSpec, secret_seed: int, count: int = 24) -> list[Case]:
     return out
 
 
-def hidden_timing_shapes(secret_seed: int, dims: int = 2) -> list[tuple[int, ...]]:
+def hidden_timing_shapes(secret_seed: int, dims: int = 2, sizes: Callable | None = None) -> list[tuple[int, ...]]:
     rng = np.random.default_rng(secret_seed ^ 0x5EED)
+    if sizes:
+        return [tuple(sizes(rng, "timing")) for _ in range(2)]
     if dims == 3:
         return [(int(rng.integers(300, 1500)), off_grid_n(rng, 300, 1500), off_grid_n(rng, 300, 1500)),
                 (int(rng.integers(8, 64)), off_grid_n(rng, 2000, 4500), off_grid_n(rng, 2000, 4500))]

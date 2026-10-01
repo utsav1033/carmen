@@ -24,6 +24,7 @@ class Mutant:
     old: str
     new: str
     why: str
+    every: bool = False  # replace every occurrence, not just the first
 
 
 MUTANTS = [
@@ -95,7 +96,30 @@ MATMUL_MUTANTS = [
            "grid x and y swapped: right only when the tile grid is square"),
 ]
 
+# attention: the causal boundary, the cache offset, the softmax and the scale.
+ATTENTION_MUTANTS = [
+    Mutant("no_max_subtraction", "precision", "metal::exp(SCORE(i, j) - m)", "metal::exp(SCORE(i, j))",
+           "exp overflows on large scores", every=True),
+    Mutant("fp16_accumulate", "precision", "float acc = 0.0f;", "half acc = 0.0h;",
+           "the weighted sum of v kept in half: drifts on long sequences"),
+    Mutant("causal_excludes_self", "boundary", "i + (Lk - Lq));", "i + (Lk - Lq) - 1);",
+           "each query can't see its own key"),
+    Mutant("causal_peeks_ahead", "boundary", "i + (Lk - Lq));", "i + (Lk - Lq) + 1);",
+           "each query sees one future key"),
+    Mutant("head_dim_tail_dropped", "boundary", "d < D; d += TG", "d < D - 1; d += TG",
+           "the last output column is never written"),
+    Mutant("cache_offset_ignored", "indexing", "metal::min(Lk - 1, i + (Lk - Lq))", "metal::min(Lk - 1, i)",
+           "causal mask aligned top-left: right only when Lq == Lk"),
+    Mutant("v_read_transposed", "indexing", "v[j * D + d]", "v[d * Lk + j]", "v read as if transposed"),
+    Mutant("barrier_removed", "sync",
+           "if (lane == 0) { shared[0] = x; }\n    }\n    threadgroup_barrier(mem_flags::mem_threadgroup);\n    m = shared[0];",
+           "if (lane == 0) { shared[0] = x; }\n    }\n    m = shared[0];", "race: threads read the max before it is written"),
+    Mutant("scale_missing", "semantic", "* scl)", ")", "scores not divided by sqrt(D)"),
+    Mutant("not_normalized", "semantic", "T(acc / l)", "T(acc)", "weighted sum never divided by the softmax total"),
+]
+
 MUTANTS_BY_OP = {
+    "attention": ATTENTION_MUTANTS,
     "matmul": MATMUL_MUTANTS,
     "layernorm": NORM_MUTANTS,
     "rmsnorm": NORM_MUTANTS,
@@ -110,13 +134,15 @@ def has_golden(op: str) -> bool:
     return (GOLDEN_DIR / f"{op}.metal").exists()
 
 
-GOLDEN_CONFIGS = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}]}
+GOLDEN_CONFIGS = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}]}
 
 
 def golden(op: str) -> Kernel:
     path = GOLDEN_DIR / f"{op}.metal"
+    header = GOLDEN_DIR / f"{op}.header.metal"
     configs = GOLDEN_CONFIGS.get(op, [{"TG": 256}])
-    return Kernel(path.read_text(), configs=[dict(c) for c in configs], plan="golden reference kernel")
+    return Kernel(path.read_text(), header.read_text() if header.exists() else "",
+                  configs=[dict(c) for c in configs], plan="golden reference kernel")
 
 
 def mutants(op: str) -> list[tuple[Mutant, Kernel]]:
@@ -127,5 +153,6 @@ def mutants(op: str) -> list[tuple[Mutant, Kernel]]:
         new = m.new.replace("float(xr[i])", "(float(xr[i]) * scl + float(mr[i]))") if op == "masked_softmax" else m.new
         if old not in base:
             raise ValueError(f"mutant {m.name} does not apply to the {op} golden kernel")
-        out.append((m, Kernel(base.replace(old, new, 1), configs=golden(op).configs, plan=m.why)))
+        g = golden(op)
+        out.append((m, Kernel(base.replace(old, new, -1 if m.every else 1), g.header, configs=g.configs, plan=m.why)))
     return out

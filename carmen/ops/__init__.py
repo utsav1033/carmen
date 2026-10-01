@@ -1,16 +1,13 @@
 from .base import Case, OpSpec
-from . import add_rmsnorm, layernorm, masked_softmax, matmul, rmsnorm, softmax
+from . import add_rmsnorm, attention, layernorm, masked_softmax, matmul, rmsnorm, softmax
 
 OPS: dict[str, OpSpec] = {s.name: s for s in (softmax.SPEC, masked_softmax.SPEC, layernorm.SPEC, rmsnorm.SPEC,
-                                       add_rmsnorm.SPEC, matmul.SPEC)}
+                                       add_rmsnorm.SPEC, matmul.SPEC,
+                                       attention.SPEC)}
 
 # Shown in the app as work in progress: not cookable yet. Each needs a reference, test inputs
 # and a baseline before the judge can grade it.
 WIP = [
-    {"name": "attention", "summary": "full fused attention, FlashAttention-style",
-     "about": "The heart of every transformer: scores, mask, softmax and the weighted sum of values, "
-              "all in one kernel that never writes the big score matrix to memory. Hundreds of lines "
-              "and easy to get subtly wrong, which is exactly where a strict judge earns its keep."},
     {"name": "rope", "summary": "rotary position embeddings",
      "about": "How a model knows word order: each pair of numbers in a query or key is rotated by an "
               "angle that depends on its position. Cheap math, but the indexing (which pairs, which "

@@ -42,7 +42,20 @@ def _norm32(op_name, inputs):
     return (x - mean) / np.sqrt(var + np.float32(1e-5)) * w + inputs["b"].astype(np.float32)
 
 
+def _attention32(inputs, offset_aware=True):
+    q, k, v = (inputs[x].astype(np.float32) for x in ("q", "k", "v"))
+    lq, d = q.shape
+    lk = k.shape[0]
+    s = q @ k.T / np.float32(np.sqrt(d))
+    shift = (lk - lq) if offset_aware else 0
+    s = np.where(np.arange(lk)[None, :] <= np.arange(lq)[:, None] + shift, s, -np.inf)
+    p = np.exp(s - s.max(axis=-1, keepdims=True))
+    return (p / p.sum(axis=-1, keepdims=True)) @ v
+
+
 def good(op_name, inputs, cfg):
+    if op_name == "attention":
+        return _attention32(inputs)
     if op_name == "matmul":
         return inputs["a"].astype(np.float32) @ inputs["b"].astype(np.float32)
     if op_name == "add_rmsnorm":
@@ -110,9 +123,14 @@ def wrong_leading_dim(op_name, inputs, cfg):
     return rows @ b
 
 
+def cache_offset_ignored(op_name, inputs, cfg):
+    """attention with the causal mask aligned top-left: exactly right when Lq == Lk."""
+    return _attention32(inputs, offset_aware=False)
+
+
 KERNELS = {f.__name__: f for f in (good, no_max_subtraction, drops_last_element, stores_through_fp16,
                                     racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance,
-                                    wrong_leading_dim)}
+                                    wrong_leading_dim, cache_offset_ignored)}
 
 
 class FakeAdapter:

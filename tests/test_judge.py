@@ -11,15 +11,17 @@ FAST = {"timing_shapes": [[64, 1000]], "timing_dtypes": ["float32"]}
 
 
 def run(source, op="softmax", configs=None, hidden_seed=None):
-    default = [{"TG": 256, "BM": 32, "BN": 32}] if op == "matmul" else [{"TG": 256}]
+    default = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}]}.get(op, [{"TG": 256}])
     k = Kernel(source, configs=configs or default)
     req = judge.build_request(op, k, round_seed=1, hidden_seed=hidden_seed, peak=100.0)
     req.update(FAST)
+    if ops.get(op).dims == 3:
+        req["timing_shapes"] = [[64, 64, 96]]
     from carmen.judge import worker
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul", "attention"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -168,3 +170,21 @@ def test_unroll_pragmas_are_allowed_other_pragmas_are_not():
     from carmen.backends import static_check
     assert static_check(Kernel("#pragma unroll\nfor (int i = 0; i < 4; ++i) {}")) is None
     assert "pragma" in static_check(Kernel("#pragma once\nint x;"))
+
+
+def test_attention_cache_offset_bug_fools_the_naive_check_but_not_the_judge():
+    v = run("cache_offset_ignored", "attention")
+    assert v["naive_pass"] and not v["correct"]
+
+
+def test_attention_draws_realistic_head_sizes_and_never_fewer_keys_than_queries():
+    from carmen.ops.base import fuzz_cases, hidden_cases
+    spec = ops.get("attention")
+    for c in fuzz_cases(spec, 5) + hidden_cases(spec, 5):
+        assert c.inner >= c.rows and 1 <= c.n <= 160
+
+
+def test_reflector_lesson_limit_fits_real_ideas():
+    from carmen.memory import lint
+    assert lint("Stage A and B tiles through threadgroup memory with " + "x" * 450) is None
+    assert "too long" in lint("y" * 800)
