@@ -34,8 +34,8 @@ class Prepared:
         self.dev = adapter.upload(self.inputs, case.dtype)
         base = adapter.baseline(op, self.dev)()
         base_err = check.row_relative_error(np.asarray(base, dtype=np.float64), self.ref)
-        self.tol = check.tolerance(case.dtype, case.n, base_err)
-        cap = check.CAP * check.floor_tol(case.dtype, case.n)
+        self.tol = check.tolerance(case.dtype, case.accum_len, base_err)
+        cap = check.CAP * check.floor_tol(case.dtype, case.accum_len)
         # Input validity gate: if the stock library can't pass an input under the cap, the
         # input is unfair (or the reference semantics disagree), so drop the input, not the kernel.
         self.valid = check.compare(np.asarray(base).ravel(), self.ref, case.dtype, cap).ok
@@ -108,34 +108,37 @@ def _correctness(adapter, op, built, cfg, prepared: list[Prepared], shrink: bool
 
 
 def _size(label: str) -> int:
-    rows, n = label.split("[", 1)[1].split(",", 1)[0].split("x")
-    return int(rows) * int(n)
+    dims = label.split("[", 1)[1].split(",", 1)[0].split("x")
+    return int(np.prod([int(d) for d in dims]))
 
 
-def _inner(op, rows: int, n: int, dt: str) -> int:
+def _inner(op, rows: int, n: int, dt: str, k: int = 0) -> int:
     """Launches per sample: as many as fit the memory cap (the stock op allocates a few
     intermediates per launch), at least 1, at most INNER."""
-    per_launch = op.bytes_moved(rows, n, dt) * 2
+    per_launch = op.bytes_moved(rows, n, dt, k) * 2
     return max(1, min(INNER, TIMING_MEMORY // per_launch))
 
 
 def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps, compiled: bool = False):
     """Time the kernel against the stock op. With `compiled`, also against mx.compile(stock op)."""
     rows_out = []
-    for rows, n in shapes:
+    for shape in shapes:
+        rows, n, depth = (*shape, 0)[:3]
         for dt in dtypes:
-            p = Prepared(op, adapter, Case("normal", rows, n, dt, rows * 31 + n, "timing"))
-            k = _inner(op, rows, n, dt)
+            p = Prepared(op, adapter, Case("normal", rows, n, dt, rows * 31 + n, "timing", depth))
+            k = _inner(op, rows, n, dt, depth)
             tc, tb = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=k),
                                      adapter.baseline_launch(op, p.dev, inner=k))
             tc, tb = tc / k, tb / k
             if hasattr(adapter, "release"):
                 adapter.release()
             s, lo, hi = stats.speedup(tc, tb)
-            gbps = op.bytes_moved(rows, n, dt) / float(np.median(tc)) / 1e9
-            row = {"shape": [rows, n], "dtype": dt, "ms": float(np.median(tc)) * 1e3,
+            gbps = op.bytes_moved(rows, n, dt, depth) / float(np.median(tc)) / 1e9
+            row = {"shape": list(shape), "dtype": dt, "ms": float(np.median(tc)) * 1e3,
                    "baseline_ms": float(np.median(tb)) * 1e3, "speedup": s, "ci": [lo, hi],
                    "gbps": gbps, "pct_peak": gbps / peak_gbps if peak_gbps else None}
+            if op.flops_fn:
+                row["gflops"] = op.flops_fn(rows, n, depth) / float(np.median(tc)) / 1e9
             if compiled:
                 tc2, tbc = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=k),
                                            adapter.baseline_launch(op, p.dev, inner=k, compiled=True))
@@ -152,7 +155,7 @@ def evaluate(req: dict, adapter) -> dict:
     kernel = Kernel.from_json(req["kernel"])
     res = {"op": op.name, "digest": kernel.digest(), "stage": "static", "correct": False}
 
-    err = static_check(kernel)
+    err = static_check(kernel) or next((e for e in map(op.check_config, kernel.configs) if e), None)
     if err:
         res["error"] = err
         return res

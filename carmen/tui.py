@@ -195,7 +195,7 @@ def verdict_panel(item: Item) -> Group:
                        ("vs mlx", "right"), ("vs compile", "right"), ("of peak", "left")):
             t.add_column(col, justify=j, no_wrap=True)
         for r in v.get("timing", []):
-            t.add_row(f"{r['shape'][0]}×{r['shape'][1]}", r["dtype"].replace("float", "f"), f"{r['ms']:.3f}",
+            t.add_row("×".join(map(str, r["shape"])), r["dtype"].replace("float", "f"), f"{r['ms']:.3f}",
                       f"{r['baseline_ms']:.3f}", speed(r["speedup"], bold=False),
                       speed(r.get("speedup_compiled"), bold=False), bar(r.get("pct_peak")))
         parts += [Text(""), t]

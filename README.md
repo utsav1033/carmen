@@ -13,15 +13,21 @@
 
 ## Results so far (Apple M4)
 
-| kernel | what MLX does | carmen's best | |
-|---|---|---|---|
-| **masked_softmax** | 3 kernels: scale, add mask, softmax | **1.84× faster** | fused into 1 kernel: 3 trips through memory instead of 7 |
-| softmax | 1 hand-tuned kernel | 0.95× | a tie: nothing left to fuse |
-| layernorm | 1 hand-tuned kernel | 0.95× | a tie |
-| rmsnorm | 1 hand-tuned kernel | 0.99× | a tie |
-| add_rmsnorm | 2 kernels: add, then rmsnorm | *running* | the next fusion test |
+| kernel | what MLX does | vs MLX | vs `mx.compile` | sizes it never saw |
+|---|---|---|---|---|
+| **masked_softmax** | 3 kernels: scale, add mask, softmax | **1.82×** | **1.38×** | 1.72× |
+| **add_rmsnorm** | 2 kernels: add, then rmsnorm | **1.41×** | **1.43×** | 1.47× |
+| softmax | 1 hand-tuned kernel | 0.95× | | |
+| layernorm | 1 hand-tuned kernel | 0.95× | | |
+| rmsnorm | 1 hand-tuned kernel | 0.99× | | |
+| matmul | 1 heavily tuned kernel | *new, not run yet* | | |
 
-**The finding:** LLM-written kernels don't beat hand-tuned code. They beat code nobody fused. Every verified kernel above also passed a hidden draw of sizes and data the model never saw.
+Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fresh memory). `mx.compile` is MLX's graph compiler: it merges element-wise steps but can't merge them into softmax or rmsnorm.
+
+**What we found:**
+- **LLM-written kernels don't beat hand-tuned code. They beat code nobody fused.** Ties where MLX has one tuned kernel, real wins where it runs several.
+- **The first draft is most of the win.** Feedback rounds added 2–4% over round 1, and the loop beat blind best-of-N by 1–3%, inside run-to-run noise (about ±5%). On these kernels, the model's first try is already near the ceiling.
+- **The judge caught real mistakes, and one of ours.** Of 96 bench kernels, 2 were wrong (an infinity mismatch, unwritten output) and 1 didn't compile; all were rejected. 12 more were rejected by an over-strict rule that banned `#pragma unroll`, a harmless speed hint. That rule is fixed: the judge has to be fair, not just strict.
 
 **The judge is measured too:** 23 realistic bugs planted across softmax and add_rmsnorm. A KernelBench-style check (one shape, `allclose` 1e-2) passed **15 of them**. carmen's judge caught **all 23**, and said where each one was.
 
@@ -46,7 +52,7 @@ Every row is a failure mode documented in the papers below or seen in practice. 
 | a slow baseline making a kernel look fast | [KernelBench-Verified](https://github.com/facebookresearch/kernel_bench_verified) | ✅ | every speedup is reported against plain MLX **and** `mx.compile` |
 | 32-bit index overflow on tensors over 2³¹ elements | seen in practice | ❌ | needs 8+ GB buffers per test; out of reach on most Macs |
 | non-contiguous or strided inputs | seen in practice | ❌ | inputs are always contiguous rows today |
-| matmul-style bugs (2D tile edges, accumulation order) | [Measuring the Checker](https://arxiv.org/abs/2609.22220) | ❌ | no matmul kernels yet |
+| matmul-style bugs: 2D tile edges, the K tail, indexing that's only right on square matrices | [Measuring the Checker](https://arxiv.org/abs/2609.22220) | ✅ new | non-square shapes on every tile edge, K from 1 to 4097, 8 seeded matmul bugs; not run on Metal yet |
 
 <p align="center"><img src="assets/home.webp" alt="carmen's terminal app" width="90%"></p>
 
@@ -219,10 +225,11 @@ tests/          the judge's logic, tested on a numpy stand-in for the GPU
 
 ## Status
 
-- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 44 tests, run on every push) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
+- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 49 tests, run on every push) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
 - ✅ On a real M4: the judge killed 12/12 seeded broken softmax kernels and 11/11 add_rmsnorm ones; every verified kernel so far is clean on hidden inputs.
 - ✅ Every speedup is reported twice: against plain MLX, and against `mx.compile` (MLX's graph compiler, which fuses element-wise ops). The second is the strongest baseline a user gets without writing Metal.
 - ⚠️ The improve rounds have not yet clearly beaten round 1 on real hardware. `carmen bench` measures that directly (loop vs best-of-N, same budget).
+- 🆕 matmul: a 2-D tiled launch, K-tail and square-only bugs, 8 seeded mutants. Tested against the numpy stand-in; first Metal run pending (`carmen broken matmul`).
 - 🔜 attention (wip), rope (wip), top-k (wip).
 
 ## Built on the shoulders of

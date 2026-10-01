@@ -43,6 +43,8 @@ def _norm32(op_name, inputs):
 
 
 def good(op_name, inputs, cfg):
+    if op_name == "matmul":
+        return inputs["a"].astype(np.float32) @ inputs["b"].astype(np.float32)
     if op_name == "add_rmsnorm":
         h = inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32)
         return _norm32("rmsnorm", {"x": h, "w": inputs["w"]})
@@ -99,8 +101,18 @@ def writes_past_end(op_name, inputs, cfg):
     return _softmax32(_prep(op_name, inputs))
 
 
+def wrong_leading_dim(op_name, inputs, cfg):
+    """matmul reading row r of A at r * N instead of r * K: exactly right when the matrices are square."""
+    a, b = inputs["a"].astype(np.float32), inputs["b"].astype(np.float32)
+    (m, k), n = a.shape, b.shape[1]
+    flat = np.concatenate([a.ravel(), np.zeros(m * n + k, np.float32)])
+    rows = np.stack([flat[r * n: r * n + k] for r in range(m)])
+    return rows @ b
+
+
 KERNELS = {f.__name__: f for f in (good, no_max_subtraction, drops_last_element, stores_through_fp16,
-                                    racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance)}
+                                    racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance,
+                                    wrong_leading_dim)}
 
 
 class FakeAdapter:
@@ -129,7 +141,7 @@ class FakeAdapter:
         return lambda: [self.run(built, op, config, dev, rows, n, dtype) for _ in range(inner)]
 
     def baseline(self, op, dev):
-        return lambda: good(op.name, dev, {}).astype(dev["x"].dtype)
+        return lambda: good(op.name, dev, {}).astype(dev[op.input_names[0]].dtype)
 
     def baseline_launch(self, op, dev, inner=1, compiled=False):
         return lambda: [self.baseline(op, dev)() for _ in range(inner)]

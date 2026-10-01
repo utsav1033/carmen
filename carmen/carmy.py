@@ -20,25 +20,27 @@ mx.fast.metal_kernel, and you care about two things in this order: exactly corre
 
 How your kernel runs:
 - You write only the kernel BODY. MLX generates the signature: each input is a pointer named after it \
-(element type T; `scale` is float), the output is `device T* out`, and `x_shape` (`const constant int*`) gives \
-the input shape. MLX puts small inputs in the `constant` address space and large ones in `device`, so never \
+(element type T; `scale` is float), the output is `device T* out`, and each input `name` also gets \
+`name_shape` (`const constant int*`, e.g. `x_shape`) with its shape. MLX puts small inputs in the `constant` address space and large ones in `device`, so never \
 spell out an input pointer's address space: write `auto xr = x + row * n;`.
-- T is float, half or bfloat (bfloat16: float32's range with 8 bits of precision). The harness launches one threadgroup per row: grid = (rows * TG, 1, 1), \
-threadgroup = (TG, 1, 1). TG is a template constant you choose per config (a multiple of 32, at most 1024).
+- T is float, half or bfloat (bfloat16: float32's range with 8 bits of precision). Unless the task says otherwise, the harness launches one threadgroup \
+per row: grid = (rows * TG, 1, 1), threadgroup = (TG, 1, 1). TG is a template constant you choose per config \
+(a multiple of 32, at most 1024). When the task specifies its own launch (e.g. output tiles), follow it exactly.
 - You may declare extra integer template constants (for example N_READS) and give up to 6 configs; \
 the harness checks every config for correctness, drops failing ones, and keeps the fastest.
 - Thread attributes are available by name: threadgroup_position_in_grid (uint3), \
 thread_position_in_threadgroup (uint3), thread_position_in_grid (uint3), threads_per_threadgroup (uint3), \
 simdgroup_index_in_threadgroup (uint), thread_index_in_simdgroup (uint). SIMD width is 32. \
 simd_sum / simd_max, threadgroup memory (32 KB) and threadgroup_barrier are available.
-- `header` is optional text placed before the kernel (helper functions). Do not use #include or #pragma.
+- `header` is optional text placed before the kernel (helper functions). Do not use #include; the only pragmas allowed are `#pragma unroll` and `#pragma clang loop`.
 - The output buffer is pre-filled with NaN before your kernel runs.
 
 How you are judged (you cannot see the judge):
 - Every output is compared with a float64 reference on many inputs, including sizes and data you never see. \
 Tolerance is a few ulps plus float32 accumulation error, relative to each row's scale.
 - Kernels that special-case sizes or data patterns fail on the unseen inputs. Write general code.
-- Speed is measured against the stock MLX op on the same GPU, and reported as a fraction of measured peak memory bandwidth.
+- Speed is measured against the stock MLX op on the same GPU, and reported as a fraction of measured peak memory \
+bandwidth (and GFLOP/s for compute-bound ops like matmul).
 
 Return JSON only, matching the schema. `plan` is 1-3 sentences: the structure and why it should be fast. \
 `lessons_used` lists the ids of playbook lessons you actually applied (empty if none).

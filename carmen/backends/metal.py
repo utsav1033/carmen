@@ -49,15 +49,15 @@ class MetalAdapter:
         return {k: put(k, v) for k, v in inputs.items()}
 
     def _call(self, built, op, config, dev_inputs, rows, n, dtype, poison: bool = True):
-        tg = config["TG"]
+        grid, threadgroup = op.grid(rows, n, config)
         template = [("T", _DTYPES[dtype])] + [(k, v) for k, v in config.items()]
         (out,) = built(
             inputs=[dev_inputs[name] for name in op.input_names],
             template=template,
-            # The harness sets the launch shape: one threadgroup per row. Carmy never picks
-            # the grid, which rules out MLX's silent dispatch truncation (grid < threadgroup).
-            grid=(rows * tg, 1, 1),
-            threadgroup=(tg, 1, 1),
+            # The harness sets the launch shape (one threadgroup per row, or per output tile).
+            # Carmy never picks the grid, which rules out MLX's silent dispatch truncation.
+            grid=grid,
+            threadgroup=threadgroup,
             output_shapes=[(rows * n + PAD,)],
             output_dtypes=[_DTYPES[dtype]],
             # Correctness runs pre-fill the output with NaN so unwritten elements show up.

@@ -66,7 +66,7 @@ def build_request(op_name: str, kernel: Kernel, *, round_seed: int | None = None
            "visible": [c.to_json() for c in visible], "peak_gbps": peak, "skip_timing": skip_timing}
     if hidden_seed is not None:
         req["hidden"] = [c.to_json() for c in hidden_cases(op, hidden_seed)]
-        req["hidden_timing_shapes"] = hidden_timing_shapes(hidden_seed)
+        req["hidden_timing_shapes"] = hidden_timing_shapes(hidden_seed, op.dims)
     return req
 
 
@@ -108,7 +108,9 @@ def feedback(v: dict) -> str:
         for r in v["timing"]:
             pct = f"{r['pct_peak']:.0%} of peak bandwidth" if r.get("pct_peak") else f"{r['gbps']:.0f} GB/s"
             comp = f", {r['speedup_compiled']:.2f}x vs mx.compile" if "speedup_compiled" in r else ""
-            lines.append(f"  {r['shape'][0]}x{r['shape'][1]} {r['dtype']}: {r['ms']:.3f} ms vs {r['baseline_ms']:.3f} ms "
+            if r.get("gflops"):
+                pct += f", {r['gflops']:.0f} GFLOP/s"
+            lines.append(f"  {'x'.join(map(str, r['shape']))} {r['dtype']}: {r['ms']:.3f} ms vs {r['baseline_ms']:.3f} ms "
                          f"-> {r['speedup']:.2f}x [{r['ci'][0]:.2f}, {r['ci'][1]:.2f}]{comp}, {pct}")
     return "\n".join(lines)
 

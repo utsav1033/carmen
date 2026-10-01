@@ -11,14 +11,15 @@ FAST = {"timing_shapes": [[64, 1000]], "timing_dtypes": ["float32"]}
 
 
 def run(source, op="softmax", configs=None, hidden_seed=None):
-    k = Kernel(source, configs=configs or [{"TG": 256}])
+    default = [{"TG": 256, "BM": 32, "BN": 32}] if op == "matmul" else [{"TG": 256}]
+    k = Kernel(source, configs=configs or default)
     req = judge.build_request(op, k, round_seed=1, hidden_seed=hidden_seed, peak=100.0)
     req.update(FAST)
     from carmen.judge import worker
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -137,7 +138,7 @@ def test_bf16_is_in_every_battery_and_round_trips_exactly():
         assert any(c.dtype == "bfloat16" for c in spec.visible)
         assert any(c.dtype == "bfloat16" for c in hidden_cases(spec, 3))
         assert any(c.dtype == "bfloat16" for c in fuzz_cases(spec, 3))
-        x = spec.materialize(Case("normal", 2, 300, "bfloat16", 1))["x"]
+        x = spec.materialize(Case("normal", 2, 300, "bfloat16", 1, "", 40 if spec.dims == 3 else 0))[spec.input_names[0]]
         assert np.array_equal(x, to_bf16(x))  # already exact bf16 values
 
 
@@ -145,3 +146,25 @@ def test_empty_cases_are_refused():
     from carmen.ops.base import Case
     with pytest.raises(ValueError):
         Case("normal", 0, 64, "float32", 1)
+
+
+def test_matmul_square_only_bug_fools_the_naive_check_but_not_the_judge():
+    v = run("wrong_leading_dim", "matmul")
+    assert v["naive_pass"] and not v["correct"]
+
+
+def test_matmul_configs_must_define_tiles():
+    v = run("good", "matmul", configs=[{"TG": 256}])
+    assert v["stage"] == "static" and "BM" in v["error"]
+
+
+def test_matmul_launch_covers_every_tile():
+    spec = ops.get("matmul")
+    grid, tg = spec.grid(65, 63, {"TG": 128, "BM": 32, "BN": 16})
+    assert grid == (4 * 128, 3, 1) and tg == (128, 1, 1)
+
+
+def test_unroll_pragmas_are_allowed_other_pragmas_are_not():
+    from carmen.backends import static_check
+    assert static_check(Kernel("#pragma unroll\nfor (int i = 0; i < 4; ++i) {}")) is None
+    assert "pragma" in static_check(Kernel("#pragma once\nint x;"))

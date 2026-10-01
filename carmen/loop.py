@@ -196,7 +196,7 @@ LEDGER_MAX = 12
 
 
 def _scores(v: dict) -> str:
-    return ", ".join(f"{r['shape'][0]}x{r['shape'][1]} {r['dtype'].replace('float', 'f')} {r['speedup']:.2f}x"
+    return ", ".join(f"{'x'.join(map(str, r['shape']))} {r['dtype'].replace('float', 'f')} {r['speedup']:.2f}x"
                      for r in v.get("timing", []))
 
 

@@ -19,7 +19,9 @@ PAD = 64
 
 MAX_SOURCE_CHARS = 30_000
 MAX_CONFIGS = 6
-BANNED_TOKENS = ("#include", "asm(", "__asm", "#pragma")
+BANNED_TOKENS = ("#include", "asm(", "__asm")
+# Loop-unrolling hints are harmless and often faster; any other pragma is refused.
+ALLOWED_PRAGMAS = ("#pragma unroll", "#pragma clang loop")
 
 
 @dataclass
@@ -52,6 +54,9 @@ def static_check(kernel: Kernel) -> str | None:
     for tok in BANNED_TOKENS:
         if tok in text:
             return f"banned token {tok!r} (MLX already includes the Metal standard library)"
+    for line in text.splitlines():
+        if line.strip().startswith("#pragma") and not line.strip().startswith(ALLOWED_PRAGMAS):
+            return f"only loop-unrolling pragmas are allowed, got {line.strip()!r}"
     if not 1 <= len(kernel.configs) <= MAX_CONFIGS:
         return f"give between 1 and {MAX_CONFIGS} configs"
     for cfg in kernel.configs:

@@ -77,7 +77,26 @@ NORM_MUTANTS = [
     Mutant("weight_ignored", "semantic", " * float(w[i])", "", "learned weight never applied"),
 ]
 
+# matmul has its own skeleton (tiles, K loop), so its own bugs.
+MATMUL_MUTANTS = [
+    Mutant("fp16_accumulate", "precision", "float acc = 0.0f;", "half acc = 0.0h;",
+           "dot products summed in half: drifts on long K"),
+    Mutant("store_through_half", "precision", "out[r * N + c] = T(acc);", "out[r * N + c] = T((half)acc);",
+           "fp32 outputs rounded to fp16"),
+    Mutant("k_tail_dropped", "boundary", "k < K; ++k", "k < K - 1; ++k", "last term of every dot product missing"),
+    Mutant("last_column_unwritten", "boundary", "if (r < M && c < N)", "if (r < M && c < N - 1)",
+           "the right edge of the output is never written"),
+    Mutant("k_starts_at_one", "boundary", "int k = 0; k < K", "int k = 1; k < K", "first term of every dot product missing"),
+    Mutant("wrong_leading_dim", "indexing", "a[r * K + k]", "a[r * N + k]",
+           "A indexed with N instead of K: right only when the matrices are square"),
+    Mutant("b_transposed", "indexing", "b[k * N + c]", "b[c * K + k]", "B read as if transposed"),
+    Mutant("tile_axes_swapped", "indexing", "int r = ty * BM + e / BN;\n    int c = tx * BN + e % BN;",
+           "int r = tx * BM + e / BN;\n    int c = ty * BN + e % BN;",
+           "grid x and y swapped: right only when the tile grid is square"),
+]
+
 MUTANTS_BY_OP = {
+    "matmul": MATMUL_MUTANTS,
     "layernorm": NORM_MUTANTS,
     "rmsnorm": NORM_MUTANTS,
     "add_rmsnorm": NORM_MUTANTS + [
@@ -91,9 +110,13 @@ def has_golden(op: str) -> bool:
     return (GOLDEN_DIR / f"{op}.metal").exists()
 
 
+GOLDEN_CONFIGS = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}]}
+
+
 def golden(op: str) -> Kernel:
     path = GOLDEN_DIR / f"{op}.metal"
-    return Kernel(path.read_text(), configs=[{"TG": 256}], plan="golden reference kernel")
+    configs = GOLDEN_CONFIGS.get(op, [{"TG": 256}])
+    return Kernel(path.read_text(), configs=[dict(c) for c in configs], plan="golden reference kernel")
 
 
 def mutants(op: str) -> list[tuple[Mutant, Kernel]]:
@@ -104,5 +127,5 @@ def mutants(op: str) -> list[tuple[Mutant, Kernel]]:
         new = m.new.replace("float(xr[i])", "(float(xr[i]) * scl + float(mr[i]))") if op == "masked_softmax" else m.new
         if old not in base:
             raise ValueError(f"mutant {m.name} does not apply to the {op} golden kernel")
-        out.append((m, Kernel(base.replace(old, new, 1), configs=[{"TG": 256}], plan=m.why)))
+        out.append((m, Kernel(base.replace(old, new, 1), configs=golden(op).configs, plan=m.why)))
     return out
