@@ -107,8 +107,9 @@ def feedback(v: dict) -> str:
         lines.append(f"\nSpeed (best config {best}) vs the stock MLX op, geomean {v['speedup_geomean']:.2f}x:")
         for r in v["timing"]:
             pct = f"{r['pct_peak']:.0%} of peak bandwidth" if r.get("pct_peak") else f"{r['gbps']:.0f} GB/s"
+            comp = f", {r['speedup_compiled']:.2f}x vs mx.compile" if "speedup_compiled" in r else ""
             lines.append(f"  {r['shape'][0]}x{r['shape'][1]} {r['dtype']}: {r['ms']:.3f} ms vs {r['baseline_ms']:.3f} ms "
-                         f"-> {r['speedup']:.2f}x [{r['ci'][0]:.2f}, {r['ci'][1]:.2f}], {pct}")
+                         f"-> {r['speedup']:.2f}x [{r['ci'][0]:.2f}, {r['ci'][1]:.2f}]{comp}, {pct}")
     return "\n".join(lines)
 
 

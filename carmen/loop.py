@@ -127,6 +127,7 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
             rr.save(f"attempts/{aid}/feedback.txt", fb)
             log("judge_result", round=r, attempt=aid, stage=v["stage"], correct=v["correct"],
                 naive_pass=v.get("naive_pass"), speedup=v.get("speedup_geomean"),
+                speedup_compiled=v.get("speedup_compiled_geomean"),
                 pct_peak_min=v.get("pct_peak_min"), hidden=_hidden_summary(v))
             if learn:
                 playbook.credit([l.id for l in shown], used, bool(v["correct"]), op.name)
@@ -256,7 +257,8 @@ def summarize(attempts: list[dict], champion: dict | None) -> dict:
     }
     if champion:
         v = champion["verdict"]
-        out.update(speedup=v["speedup_geomean"], pct_peak_min=v.get("pct_peak_min"),
+        out.update(speedup=v["speedup_geomean"], speedup_compiled=v.get("speedup_compiled_geomean"),
+                   pct_peak_min=v.get("pct_peak_min"),
                    best_config=v["best_config"], default_config_speedup=v.get("default_config_speedup"))
         if v.get("hidden"):
             out.update(hidden_speedup=v["hidden"].get("speedup_geomean"),

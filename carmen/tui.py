@@ -132,14 +132,6 @@ def bar(frac, width: int = 10) -> Text:
     return Text("━" * n, style=INK) + Text("━" * (width - n), style=EDGE) + Text(f" {frac:.0%}", style=DIM)
 
 
-def spark(values: list[float]) -> Text:
-    if not values:
-        return Text("")
-    ticks = "▁▂▃▄▅▆▇█"
-    lo, hi = min(values), max(values)
-    return Text("".join(ticks[0 if hi == lo else round((v - lo) / (hi - lo) * 7)] for v in values), style=GREEN)
-
-
 def plain_failure(v: dict) -> str:
     """One human sentence for why a kernel was rejected."""
     if v.get("stage") in ("static", "compile", "timeout", "crash"):
@@ -185,13 +177,14 @@ def verdict_panel(item: Item) -> Group:
                                               for c in item.kernel.configs), style=DIM))
     if v and v.get("correct"):
         s = Table.grid(padding=(0, 3))
-        for _ in range(4):
+        for _ in range(5):
             s.add_column()
         h = v.get("hidden") or {}
         pct = v.get("pct_peak_min")
-        s.add_row(Text("vs mlx", style=DIM), Text("on hidden sizes", style=DIM), Text("worst % of peak", style=DIM),
-                  Text("naive check", style=DIM))
-        s.add_row(speed(v.get("speedup_geomean")), speed(h.get("speedup_geomean")),
+        s.add_row(Text("vs mlx", style=DIM), Text("vs mx.compile", style=DIM), Text("on hidden sizes", style=DIM),
+                  Text("worst % of peak", style=DIM), Text("naive check", style=DIM))
+        s.add_row(speed(v.get("speedup_geomean")), speed(v.get("speedup_compiled_geomean")),
+                  speed(h.get("speedup_geomean")),
                   Text("—" if pct is None else f"{pct:.0%}", style=f"bold {INK}"),
                   Text("passes" if v.get("naive_pass") else "fails", style=INK))
         parts += [Text(""), s]
@@ -199,11 +192,12 @@ def verdict_panel(item: Item) -> Group:
             parts.append(Text("⚠ faster than the memory system allows: timing or kernel is suspect", style=AMBER))
         t = Table(box=box.SIMPLE_HEAD, expand=True, header_style=DIM, border_style=EDGE, pad_edge=False)
         for col, j in (("shape", "left"), ("", "left"), ("ms", "right"), ("mlx ms", "right"),
-                       ("speed", "right"), ("of peak", "left")):
+                       ("vs mlx", "right"), ("vs compile", "right"), ("of peak", "left")):
             t.add_column(col, justify=j, no_wrap=True)
         for r in v.get("timing", []):
             t.add_row(f"{r['shape'][0]}×{r['shape'][1]}", r["dtype"].replace("float", "f"), f"{r['ms']:.3f}",
-                      f"{r['baseline_ms']:.3f}", speed(r["speedup"], bold=False), bar(r.get("pct_peak")))
+                      f"{r['baseline_ms']:.3f}", speed(r["speedup"], bold=False),
+                      speed(r.get("speedup_compiled"), bold=False), bar(r.get("pct_peak")))
         parts += [Text(""), t]
     if item.feedback:
         parts += [Text(""), Text("what Carmy was told", style=f"bold {INK}"), Text(item.feedback, style=DIM)]
@@ -294,10 +288,10 @@ INTRO = Text.assemble(
 def loop_diagram() -> Text:
     """The self-improving loop, drawn with the return arrow on the left."""
     t = Text()
-    steps = [("① draft ", "Carmy writes 3 kernels in parallel"),
-             ("② judge ", "correct on 100s of inputs? how fast?"),
-             ("③ keep  ", "fastest proven kernel = champion"),
-             ("④ learn ", "scorecard + what failed + notes")]
+    steps = [("1 draft ", "Carmy writes 3 kernels in parallel"),
+             ("2 judge ", "correct on 100s of inputs? how fast?"),
+             ("3 keep  ", "fastest proven kernel = champion"),
+             ("4 learn ", "scorecard + what failed + notes")]
     for i, (name, what) in enumerate(steps):
         rail = "┌─→ " if i == 0 else "└── " if i == len(steps) - 1 else "│   "
         t.append(rail, style=GREEN).append(name, style=f"bold {WHITE}").append(f" {what}\n", style=DIM)
@@ -514,7 +508,12 @@ class KitchenScreen(Screen):
         t = Text.assemble(("★ ", GREEN), (ch["attempt"], f"bold {WHITE}"), "   ", speed(ch["speedup"]), (" vs mlx", DIM))
         if ch.get("pct") is not None:
             t.append(f"   {ch['pct']:.0%} of peak bandwidth", style=DIM)
-        t.append("   speed by round  ", style=FAINT).append_text(spark(self.history))
+        if self.history:
+            t.append("\nbest each round  ", style=FAINT)
+            for i, v in enumerate(self.history):
+                if i:
+                    t.append("  →  ", style=EDGE)
+                t.append_text(speed(v, bold=False) if v else Text("none", style=DIM))
         if self.note:
             t.append(f"\n{self.note}", style=DIM)
         self.query_one("#strip", Static).update(t)
@@ -552,7 +551,9 @@ class KitchenScreen(Screen):
             self.champion = {"attempt": d["attempt"], "speedup": d["speedup"], "pct": d.get("pct_peak_min")}
             self.query_one("#judgelog", RichLog).write(Text(f"★ {d['attempt']} is the new champion", style=GREEN))
         elif t == "round_finished":
-            self.history.append(self.champion["speedup"] if self.champion else 0.0)
+            best = max((c.result.get("speedup") or 0 for c in cards if c.result and c.result.get("correct")),
+                       default=0.0)
+            self.history.append(best)
         elif t == "stopped":
             self.note = d["reason"]
         self.render_all()
@@ -564,6 +565,9 @@ class KitchenScreen(Screen):
             h = d.get("hidden") or {}
             head.append("✓ verified  ", style=f"bold {GREEN}").append_text(speed(d.get("speedup")))
             head.append(" vs mlx", style=DIM)
+            if d.get("speedup_compiled"):
+                head.append(" · ", style=DIM).append_text(speed(d["speedup_compiled"], bold=False))
+                head.append(" vs mx.compile", style=DIM)
             if d.get("pct_peak_min") is not None:
                 head.append(f" · {d['pct_peak_min']:.0%} of peak", style=DIM)
             if h:
@@ -744,6 +748,8 @@ class PlatedScreen(Screen):
             pct = sm.get("pct_peak_min")
             t.add_row("best kernel", Text(f"{self.op} · {sm['champion']}", style=f"bold {WHITE}"))
             t.add_row("speed vs mlx", speed(sm.get("speedup")))
+            if sm.get("speedup_compiled"):
+                t.add_row("vs mx.compile(mlx)", speed(sm.get("speedup_compiled")))
             t.add_row("on sizes it never saw", speed(sm.get("hidden_speedup")))
             t.add_row("worst % of peak", Text("—" if pct is None else f"{pct:.0%}", style=INK))
             if sm.get("hidden_total"):

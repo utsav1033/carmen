@@ -18,7 +18,7 @@ def run(source, op="softmax", configs=None, hidden_seed=None):
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -113,7 +113,7 @@ def test_locate_reports_counts_for_tiny_fractions():
     assert "1 element," in check.locate(bad)
 
 
-@pytest.mark.parametrize("op", ["layernorm", "rmsnorm"])
+@pytest.mark.parametrize("op", ["layernorm", "rmsnorm", "add_rmsnorm"])
 def test_norms_reject_an_empty_kernel(op):
     assert not run("zeros", op)["correct"]
 
@@ -122,3 +122,10 @@ def test_layernorm_catches_one_pass_variance():
     v = run("one_pass_variance", "layernorm")
     assert not v["correct"]
     assert any(f["case"].startswith("offset") for f in v["configs"][0]["failures"])
+
+
+def test_every_op_has_a_golden_kernel_and_mutants_that_apply():
+    from carmen import broken
+    for name in ops.OPS:
+        ms = broken.mutants(name)
+        assert ms and all(k.source != broken.golden(name).source for _, k in ms)

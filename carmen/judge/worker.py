@@ -111,7 +111,8 @@ def _inner(op, rows: int, n: int, dt: str) -> int:
     return max(1, min(INNER, TIMING_MEMORY // per_launch))
 
 
-def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps):
+def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps, compiled: bool = False):
+    """Time the kernel against the stock op. With `compiled`, also against mx.compile(stock op)."""
     rows_out = []
     for rows, n in shapes:
         for dt in dtypes:
@@ -124,9 +125,17 @@ def _timing(adapter, op, built, cfg, shapes, dtypes, peak_gbps):
                 adapter.release()
             s, lo, hi = stats.speedup(tc, tb)
             gbps = op.bytes_moved(rows, n, dt) / float(np.median(tc)) / 1e9
-            rows_out.append({"shape": [rows, n], "dtype": dt, "ms": float(np.median(tc)) * 1e3,
-                             "baseline_ms": float(np.median(tb)) * 1e3, "speedup": s, "ci": [lo, hi],
-                             "gbps": gbps, "pct_peak": gbps / peak_gbps if peak_gbps else None})
+            row = {"shape": [rows, n], "dtype": dt, "ms": float(np.median(tc)) * 1e3,
+                   "baseline_ms": float(np.median(tb)) * 1e3, "speedup": s, "ci": [lo, hi],
+                   "gbps": gbps, "pct_peak": gbps / peak_gbps if peak_gbps else None}
+            if compiled:
+                tc2, tbc = stats.time_pair(adapter.launch(built, op, cfg, p.dev, rows, n, dt, inner=k),
+                                           adapter.baseline_launch(op, p.dev, inner=k, compiled=True))
+                if hasattr(adapter, "release"):
+                    adapter.release()
+                sc, clo, chi = stats.speedup(tc2 / k, tbc / k)
+                row.update(compiled_ms=float(np.median(tbc / k)) * 1e3, speedup_compiled=sc, ci_compiled=[clo, chi])
+            rows_out.append(row)
     return rows_out
 
 
@@ -185,9 +194,11 @@ def evaluate(req: dict, adapter) -> dict:
         pick = max(passing, key=lambda cfg: _timing(adapter, op, built, cfg, probe, ["float32"], peak)[0]["speedup"])
     else:
         pick = passing[0]
-    t = _timing(adapter, op, built, pick, shapes, dtypes, peak)
+    t = _timing(adapter, op, built, pick, shapes, dtypes, peak, compiled=req.get("compiled_baseline", True))
     best = (pick, stats.geomean([r["speedup"] for r in t]), t)
     res["best_config"], res["speedup_geomean"], res["timing"] = best
+    if all("speedup_compiled" in r for r in t):
+        res["speedup_compiled_geomean"] = stats.geomean([r["speedup_compiled"] for r in t])
     default = kernel.configs[0]
     res["default_config_speedup"] = best[1] if default == best[0] or default not in passing else \
         stats.geomean([r["speedup"] for r in _timing(adapter, op, built, default, shapes[:1], ["float32"], peak)])

@@ -37,6 +37,9 @@ def _norm32(op_name, inputs):
 
 
 def good(op_name, inputs, cfg):
+    if op_name == "add_rmsnorm":
+        h = inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32)
+        return _norm32("rmsnorm", {"x": h, "w": inputs["w"]})
     if op_name in ("layernorm", "rmsnorm"):
         return _norm32(op_name, inputs)
     return _softmax32(_prep(op_name, inputs))
@@ -122,7 +125,7 @@ class FakeAdapter:
     def baseline(self, op, dev):
         return lambda: good(op.name, dev, {}).astype(dev["x"].dtype)
 
-    def baseline_launch(self, op, dev, inner=1):
+    def baseline_launch(self, op, dev, inner=1, compiled=False):
         return lambda: [self.baseline(op, dev)() for _ in range(inner)]
 
     def measure_peak_gbps(self):

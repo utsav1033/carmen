@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from . import broken, dotenv, judge, ops, ui
@@ -170,10 +171,44 @@ def _print_summary(sm: dict) -> None:
         ["hidden tests clean", sm["hidden_clean"] + " verified kernels"],
         ["champion", sm.get("champion") or "none"],
         ["speedup vs MLX", ui.speed(sm.get("speedup"))],
+        ["vs mx.compile(MLX)", ui.speed(sm.get("speedup_compiled"))],
         ["on hidden sizes", ui.speed(sm.get("hidden_speedup"))],
         ["worst % of peak", ui.pct(sm.get("pct_peak_min"))],
     ])
     print(ui.s(f"\nrun saved to {sm['run_dir']}", "grey"))
+
+
+def cmd_bench(args) -> int:
+    from . import bench, loop
+    from .carmy import CarmyAuthError
+    args.ops = args.ops or ["masked_softmax", "add_rmsnorm"]
+    unknown = [o for o in args.ops if o not in ops.OPS]
+    if unknown:
+        print(f"{ui.BAD} unknown kernel(s): {', '.join(unknown)}. Choose from: {', '.join(ops.OPS)}")
+        return 2
+    calls = len(args.ops) * len(bench.MODES) * args.repeats * args.rounds * args.k
+    ui.banner("bench · loop vs best-of-N")
+    print(f"{len(args.ops)} kernel(s) x 2 modes x {args.repeats} repeat(s) x {args.rounds} rounds x {args.k} drafts "
+          f"= {ui.s(str(calls), 'bold')} model calls (effort {args.effort}). Leave it running; it takes a while.")
+    if not args.yes and input("start? [y/N] ").strip().lower() != "y":
+        return 1
+    peak = judge.peak_gbps(args.backend)
+    root = Path(args.out) / time.strftime("%Y%m%d-%H%M%S")
+    try:
+        out = bench.run(args.ops, repeats=args.repeats, rounds=args.rounds, k=args.k, root=root, run_fn=loop.run,
+                        on_progress=lambda m: print(ui.s("  " + m, "grey")), model=args.model, effort=args.effort,
+                        backend=args.backend, peak=peak)
+    except CarmyAuthError as e:
+        print(f"\n{ui.BAD} {e}")
+        return 2
+    ui.rule("result")
+    ui.table(["kernel", "mode", "vs MLX", "vs mx.compile", "unseen sizes", "round 1 → final", "verified"],
+             [[r["op"], "loop" if r["mode"] == "loop" else "best-of-N", ui.speed(r["speedup"]),
+               ui.speed(r["speedup_compiled"]), ui.speed(r["hidden_speedup"]),
+               f"{bench._x(r['round1'])} → {bench._x(r['speedup'])}", f"{r['verified']}/{r['attempts']}"]
+              for r in out["table"]])
+    print(ui.s(f"\nsaved {root / 'bench.md'} (paste it into the README) and {root / 'bench.json'}", "grey"))
+    return 0
 
 
 def cmd_report(args) -> int:
@@ -275,6 +310,17 @@ def main(argv=None) -> int:
     p.add_argument("--runs", default="runs")
     p.add_argument("--memory", default="memory")
     p.set_defaults(fn=cmd_run)
+
+    p = sub.add_parser("bench", help="loop vs best-of-N on the same budget, repeated, one summary table")
+    p.add_argument("ops", nargs="*", metavar="op", help="kernels to bench (default: masked_softmax add_rmsnorm)")
+    p.add_argument("--repeats", type=int, default=2)
+    p.add_argument("--rounds", type=int, default=4)
+    p.add_argument("--k", type=int, default=3)
+    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--effort", default="high", choices=["low", "medium", "high", "xhigh", "max"])
+    p.add_argument("--out", default="runs/bench")
+    p.add_argument("--yes", action="store_true", help="don't ask before starting")
+    p.set_defaults(fn=cmd_bench)
 
     p = sub.add_parser("report", help="summarize a run")
     p.add_argument("run")

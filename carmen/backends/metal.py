@@ -77,9 +77,17 @@ class MetalAdapter:
             return np.array(y)
         return go
 
-    def baseline_launch(self, op, dev_inputs, inner: int = 1):
+    def baseline_launch(self, op, dev_inputs, inner: int = 1, compiled: bool = False):
+        fn = lambda d: op.mlx_baseline(mx, d)  # noqa: E731
+        if compiled:
+            # mx.compile fuses chains of element-wise ops (e.g. x * scale + mask) into one kernel:
+            # the strongest stock baseline a user gets without writing Metal.
+            names = list(dev_inputs)
+            fused = mx.compile(lambda *arrs: op.mlx_baseline(mx, dict(zip(names, arrs))))
+            fn = lambda d: fused(*[d[k] for k in names])  # noqa: E731
+
         def go():
-            mx.eval(*[op.mlx_baseline(mx, dev_inputs) for _ in range(inner)])
+            mx.eval(*[fn(dev_inputs) for _ in range(inner)])
         return go
 
     def release(self) -> None:

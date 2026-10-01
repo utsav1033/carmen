@@ -139,3 +139,21 @@ def test_carmy_sees_what_was_already_tried(tmp_path, monkeypatch):
     assert "0-0" in seen[2] and "verified" in seen[2] and "64x1000 f32" in seen[2]
     assert "0-1" in seen[2] and "rejected" in seen[2]
     assert len(reflected) == 1  # round 0 found the first champion; round 1 proved nothing
+
+
+def test_bench_compares_loop_and_best_of_n_on_the_same_budget(tmp_path, monkeypatch):
+    from carmen import bench
+    monkeypatch.setattr(ops.get("softmax"), "timing_shapes", ((64, 1000),))
+    calls = []
+
+    def run_fn(op, **kw):
+        calls.append((kw["mode"], kw["rounds"], kw["k"], kw["patience"]))
+        return loop.run(op, adapter=FakeAdapter(), write_fn=scripted_carmy(["good"] * 4), reflect_fn=no_reflect,
+                        peak=PEAK, **kw)
+
+    out = bench.run(["softmax"], repeats=1, rounds=2, k=2, root=tmp_path / "bench", run_fn=run_fn,
+                    on_progress=lambda m: None)
+    assert [c[0] for c in calls] == ["loop", "bon"] and all(c[3] > c[1] for c in calls)
+    assert {r["mode"] for r in out["table"]} == {"loop", "bon"}
+    assert all(len(r["curve"]) == 2 for r in out["results"])
+    assert "best-of-N" in (tmp_path / "bench" / "bench.md").read_text()

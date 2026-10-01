@@ -88,8 +88,9 @@ class Adapter(Protocol):
     def baseline(self, op, dev_inputs) -> Callable[[], np.ndarray]:
         """Return a function that runs the stock library op, blocks, and returns its output."""
 
-    def baseline_launch(self, op, dev_inputs, inner: int = 1) -> Callable[[], None]:
-        """Return a function that runs the stock library op `inner` times and blocks (for timing)."""
+    def baseline_launch(self, op, dev_inputs, inner: int = 1, compiled: bool = False) -> Callable[[], None]:
+        """Return a function that runs the stock library op `inner` times and blocks (for timing).
+        `compiled=True` wraps it in the library's graph compiler (mx.compile), which fuses element-wise ops."""
 
     def measure_peak_gbps(self) -> float:
         """Practical memory bandwidth from a copy kernel."""

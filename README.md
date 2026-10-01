@@ -3,9 +3,41 @@
 </p>
 
 <p align="center">
-  <b>A self-correcting harness that gets LLMs to write fast GPU kernels, and proves they're right.</b><br>
-  <sub>Apple Metal today. Any chip tomorrow: one adapter file.</sub>
+  <b>A self-improving harness where an LLM writes Apple Metal kernels and a judge it can't fool decides what's real.</b><br>
+  <sub>Under 4k lines of Python. Apple Metal today; a new chip is one adapter file.</sub>
 </p>
+
+<p align="center">
+  <a href="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml"><img src="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+</p>
+
+## Results so far (Apple M4)
+
+| kernel | what MLX does | carmen's best | |
+|---|---|---|---|
+| **masked_softmax** | 3 kernels: scale, add mask, softmax | **1.84× faster** | fused into 1 kernel: 3 trips through memory instead of 7 |
+| softmax | 1 hand-tuned kernel | 0.95× | a tie: nothing left to fuse |
+| layernorm | 1 hand-tuned kernel | 0.95× | a tie |
+| rmsnorm | 1 hand-tuned kernel | 0.99× | a tie |
+| add_rmsnorm | 2 kernels: add, then rmsnorm | *running* | the next fusion test |
+
+**The finding:** LLM-written kernels don't beat hand-tuned code. They beat code nobody fused. Every verified kernel above also passed a hidden draw of sizes and data the model never saw.
+
+**The judge is measured too:** 12 realistic bugs planted in a softmax kernel. A KernelBench-style check (one shape, `allclose` 1e-2) passed **10 of them**. carmen's judge caught **all 12**, and said where each one was.
+
+<p align="center"><img src="assets/home.webp" alt="carmen's terminal app" width="90%"></p>
+
+## Install
+
+On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv tool install "carmen[metal] @ git+https://github.com/utsav1033/kernel-sahab"
+export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
+carmen                              # the app
+```
+
+No uv? `pipx install "carmen[metal] @ git+https://github.com/utsav1033/kernel-sahab"` does the same.
 
 ---
 
@@ -28,6 +60,8 @@ Generation is cheap now. **Trust is the bottleneck.** carmen is built around tha
 - **The loop** gets from *correct* to *fast*: three Carmy drafts in parallel, the judge ranks them, the best becomes the champion, and each round attacks one bottleneck. Carmy sees the whole per-shape scorecard (a win on one shape that loses the others is thrown away) and a ledger of every idea already tried and how it scored, so rounds build on each other instead of repeating. Lessons are written only after a round that proved something. It stops near the chip's measured memory bandwidth, the physical ceiling.
 - **Memory** keeps only what the judge proved. Lessons are credited by verdicts, never by the model saying "that worked".
 
+<p align="center"><img src="assets/cook.webp" alt="a cook in progress: three drafts, the judge's verdicts, the champion" width="90%"></p>
+
 ```mermaid
 flowchart LR
     C["Carmy × 3<br/>parallel drafts"] -->|kernel text| J{{"judge<br/>compile · float64 · invariants<br/>fresh fuzz · hidden draw · timing"}}
@@ -39,7 +73,7 @@ flowchart LR
     J -.->|"hidden results<br/>(never shown to Carmy)"| R["report"]
 ```
 
-## Quickstart
+## From source
 
 On an Apple Silicon Mac:
 
@@ -80,6 +114,7 @@ Run **`carmen`** with no arguments. It follows one path:
 | `carmen judge <op> <file>` | judge a kernel you wrote; `--tg 128 --tg 256` sweeps threadgroup sizes, `--hidden` adds a secret draw |
 | `carmen broken <op>` | run 10-12 seeded broken kernels (per op) through the judge *and* through a KernelBench-style check, side by side |
 | `carmen run <op>` | the self-correcting loop; `--mode bon` runs the best-of-N control arm at the same budget |
+| `carmen bench [ops]` | loop vs best-of-N on the same budget, repeated, one table (`bench.md`) ready to paste here |
 | `carmen report <run>` | the numbers below, for one run |
 | `carmen playbook` | what Carmy has learned, and how much each lesson is worth |
 
@@ -161,22 +196,11 @@ tests/          the judge's logic, tested on a numpy stand-in for the GPU
 
 ## Status
 
-Honest version:
-
-| kernel | status | result on an M4 |
-|---|---|---|
-| `softmax` | ready | 0.95× MLX (MLX's own is hand-tuned; a tie is the bar) |
-| `masked_softmax` | ready | **1.79×** MLX (fused: 1 memory trip instead of 3) |
-| `layernorm` | ready, not run on Metal yet | expect a tie: MLX already fuses it |
-| `rmsnorm` | ready, not run on Metal yet | expect a tie: MLX already fuses it |
-| `attention` | wip | full fused attention, the real target |
-| `rope` | wip | |
-| `top_k` | wip | |
-
-- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 38 tests) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
-- ✅ On a real M4, the judge killed 12/12 seeded broken softmax kernels; every verified kernel so far is clean on hidden inputs.
-- ⚠️ The improve rounds have not yet beaten round 1 on real hardware. The fix (full scorecard + a ledger of tried ideas) is in; it needs a run to prove it.
-- 🔜 attention, a hacker-fixer pass that attacks the judge before freezing it, hardware counters.
+- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 42 tests, run on every push) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
+- ✅ On a real M4: the judge killed 12/12 seeded broken softmax kernels; every verified kernel so far is clean on hidden inputs.
+- ✅ Every speedup is reported twice: against plain MLX, and against `mx.compile` (MLX's graph compiler, which fuses element-wise ops). The second is the strongest baseline a user gets without writing Metal.
+- ⚠️ The improve rounds have not yet clearly beaten round 1 on real hardware. `carmen bench` measures that directly (loop vs best-of-N, same budget).
+- 🔜 attention (wip), rope (wip), top-k (wip).
 
 ## Built on the shoulders of
 

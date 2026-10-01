@@ -77,7 +77,14 @@ NORM_MUTANTS = [
     Mutant("weight_ignored", "semantic", " * float(w[i])", "", "learned weight never applied"),
 ]
 
-MUTANTS_BY_OP = {"layernorm": NORM_MUTANTS, "rmsnorm": NORM_MUTANTS}
+MUTANTS_BY_OP = {
+    "layernorm": NORM_MUTANTS,
+    "rmsnorm": NORM_MUTANTS,
+    "add_rmsnorm": NORM_MUTANTS + [
+        Mutant("residual_dropped_on_write", "semantic", "o[i] = T((float(xr[i]) + float(rr[i])) * inv",
+               "o[i] = T(float(xr[i]) * inv", "normalizes x + res but writes x, not the sum"),
+    ],
+}
 
 
 def has_golden(op: str) -> bool:
