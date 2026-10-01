@@ -26,8 +26,28 @@ def _prep(op_name, inputs):
     return x
 
 
+def _norm32(op_name, inputs):
+    """Float32 two-pass layernorm / rmsnorm, like the golden kernels."""
+    x, w = inputs["x"].astype(np.float32), inputs["w"].astype(np.float32)
+    if op_name == "rmsnorm":
+        return x / np.sqrt((x * x).mean(axis=-1, keepdims=True) + np.float32(1e-5)) * w
+    mean = x.mean(axis=-1, keepdims=True)
+    var = ((x - mean) ** 2).mean(axis=-1, keepdims=True)
+    return (x - mean) / np.sqrt(var + np.float32(1e-5)) * w + inputs["b"].astype(np.float32)
+
+
 def good(op_name, inputs, cfg):
+    if op_name in ("layernorm", "rmsnorm"):
+        return _norm32(op_name, inputs)
     return _softmax32(_prep(op_name, inputs))
+
+
+def one_pass_variance(op_name, inputs, cfg):
+    """layernorm with var = E[x^2] - mean^2: right near zero, wrong for offset rows."""
+    x = inputs["x"].astype(np.float32)
+    mean = x.mean(axis=-1, keepdims=True)
+    var = np.maximum((x * x).mean(axis=-1, keepdims=True) - mean * mean, 0)
+    return (x - mean) / np.sqrt(var + np.float32(1e-5)) * inputs["w"].astype(np.float32) + inputs["b"]
 
 
 def no_max_subtraction(op_name, inputs, cfg):
@@ -71,7 +91,7 @@ def writes_past_end(op_name, inputs, cfg):
 
 
 KERNELS = {f.__name__: f for f in (good, no_max_subtraction, drops_last_element, stores_through_fp16,
-                                    racy, zeros, bad_when_big_tg, writes_past_end)}
+                                    racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance)}
 
 
 class FakeAdapter:

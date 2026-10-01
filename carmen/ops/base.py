@@ -71,6 +71,11 @@ class OpSpec:
     timing_shapes: tuple[tuple[int, int], ...] = ()
     # The KernelBench-style check we compare against: one shape, uniform [0,1), allclose 1e-2
     naive: Case | None = None
+    # Plain-English note for the app: what this is for in a model, and where a custom kernel can win
+    about: str = ""
+    # Inputs read once per row (shape (rows, n)). None = every input except `scale`.
+    # Per-column vectors like layernorm's weight are tiny and stay in cache, so they don't count.
+    streamed: tuple[str, ...] | None = None
 
     def materialize(self, case: Case) -> dict[str, np.ndarray]:
         rng = np.random.default_rng(case.seed)
@@ -79,7 +84,8 @@ class OpSpec:
     def bytes_moved(self, rows: int, n: int, dtype: str) -> int:
         """Minimum memory traffic: read every input once, write the output once."""
         item = np.dtype(dtype).itemsize
-        per_row_inputs = sum(1 for name in self.input_names if name != "scale")
+        streamed = self.streamed if self.streamed is not None else [k for k in self.input_names if k != "scale"]
+        per_row_inputs = len(streamed)
         return rows * n * item * (per_row_inputs + 1)
 
 

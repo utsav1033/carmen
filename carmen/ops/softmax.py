@@ -115,7 +115,7 @@ VISIBLE = (
 
 SPEC = OpSpec(
     name="softmax",
-    summary="softmax over the last axis",
+    summary="raw scores → percentages that add up to 100%",
     input_names=("x",),
     contract=CONTRACT,
     generators={
@@ -131,4 +131,8 @@ SPEC = OpSpec(
     hidden_kinds=("peaked", "skewed", "offset", "neg_inf_mask", "very_negative", "normal"),
     timing_shapes=((4096, 1024), (1024, 4096), (128, 32768)),
     naive=Case("uniform01", 64, 1000, "float32", 42, "naive"),
+    about="Turns a row of raw scores into percentages that add up to 100%. Inside attention, it decides "
+          "how much each past word matters to the next one. The trap: big scores overflow exp() unless "
+          "you subtract the row's max first. MLX's version is already hand-tuned, so matching it is the "
+          "honest bar.",
 )

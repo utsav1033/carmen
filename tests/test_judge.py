@@ -18,7 +18,7 @@ def run(source, op="softmax", configs=None, hidden_seed=None):
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -111,3 +111,14 @@ def test_locate_reports_counts_for_tiny_fractions():
     bad = np.zeros((3, 5000), bool)
     bad[1, 17] = True
     assert "1 element," in check.locate(bad)
+
+
+@pytest.mark.parametrize("op", ["layernorm", "rmsnorm"])
+def test_norms_reject_an_empty_kernel(op):
+    assert not run("zeros", op)["correct"]
+
+
+def test_layernorm_catches_one_pass_variance():
+    v = run("one_pass_variance", "layernorm")
+    assert not v["correct"]
+    assert any(f["case"].startswith("offset") for f in v["configs"][0]["failures"])

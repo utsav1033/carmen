@@ -110,7 +110,7 @@ VISIBLE = (
 
 SPEC = OpSpec(
     name="masked_softmax",
-    summary="softmax(x * scale + mask), fused attention scores",
+    summary="attention: scale, hide future words, softmax",
     input_names=("x", "mask", "scale"),
     contract=CONTRACT,
     generators={
@@ -125,4 +125,7 @@ SPEC = OpSpec(
     hidden_kinds=("peaked", "causal", "bias_mask", "normal"),
     timing_shapes=((4096, 1024), (1024, 4096), (128, 32768)),
     naive=Case("uniform01", 64, 1000, "float32", 42, "naive"),
+    about="The attention step that asks which past words matter: scale the scores, hide the words the "
+          "model may not look at (the future), then softmax. MLX does this in 3 trips through memory. "
+          "One fused kernel does it in 1, and memory trips are the slow part. That is where Carmy wins.",
 )

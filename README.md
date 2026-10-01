@@ -63,7 +63,7 @@ carmen report runs/<id>
 
 Run **`carmen`** with no arguments. It follows one path:
 
-1. **Home:** pick an op. Each shows its best verified result so far.
+1. **Home:** what carmen is in three lines, the kernels you can cook (with their best verified result), the self-improving loop drawn out, and a plain-English note on the highlighted kernel. Work-in-progress kernels are listed but greyed out.
 2. **Kitchen:** watch it cook live. A stage rail (draft → judge → improve → plated), three draft cards that go *writing → judging → ✓ verified 1.31× / ✗ tail bug at n=33*, what the judge said, and the champion with its speed by round. `s` stops after the current round.
 3. **Inspect:** open any card for the code beside its verdict: speed per shape, % of peak, hidden results, and exactly what Carmy was told. `d` diffs it against the champion, `i` improves from it, `e` exports the `.metal`.
 4. **Plated:** the result. Best kernel, speed vs MLX on seen and unseen sizes, and how many wrong kernels a naive check would have passed.
@@ -78,7 +78,7 @@ Run **`carmen`** with no arguments. It follows one path:
 | `carmen ops` | list the ops the judge knows |
 | `carmen peak` | copy-kernel bandwidth, used as the roofline for every speed claim |
 | `carmen judge <op> <file>` | judge a kernel you wrote; `--tg 128 --tg 256` sweeps threadgroup sizes, `--hidden` adds a secret draw |
-| `carmen broken <op>` | run 12 seeded broken kernels through the judge *and* through a KernelBench-style check, side by side |
+| `carmen broken <op>` | run 10-12 seeded broken kernels (per op) through the judge *and* through a KernelBench-style check, side by side |
 | `carmen run <op>` | the self-correcting loop; `--mode bon` runs the best-of-N control arm at the same budget |
 | `carmen report <run>` | the numbers below, for one run |
 | `carmen playbook` | what Carmy has learned, and how much each lesson is worth |
@@ -116,7 +116,7 @@ expected (unwritten output, or overflow), in only the last elements of rows (col
 of 4938): tail handling. At row 0, column 4937: got nan, expected 0.
 ```
 
-**The judge is measured too.** `carmen broken` runs 12 seeded bugs across five fault families (boundary, precision, sync, indexing, semantic; see [Du et al.](https://arxiv.org/abs/2609.22220)), and reports how many carmen kills and how many a KernelBench-style check would have let through.
+**The judge is measured too.** `carmen broken` runs 12 seeded bugs (10 for the norms) across five fault families (boundary, precision, sync, indexing, semantic; see [Du et al.](https://arxiv.org/abs/2609.22220)), and reports how many carmen kills and how many a KernelBench-style check would have let through.
 
 ## Philosophy
 
@@ -163,9 +163,20 @@ tests/          the judge's logic, tested on a numpy stand-in for the GPU
 
 Honest version:
 
-- ✅ The judge's logic, the loop, memory and the CLI are tested (`pytest`, 20 tests) against a numpy stand-in for the GPU. The tests show the judge catching kernels that a KernelBench-style check passes.
-- ⚠️ **The Metal backend and the golden kernels haven't been run on Apple Silicon yet.** They're written against MLX's documented `mx.fast.metal_kernel` API. First real run: `carmen broken softmax` on a Mac.
-- 🔜 layernorm, a hacker-fixer pass that attacks the judge before freezing it, hardware counters, and a dashboard over `runs/`.
+| kernel | status | result on an M4 |
+|---|---|---|
+| `softmax` | ready | 0.95× MLX (MLX's own is hand-tuned; a tie is the bar) |
+| `masked_softmax` | ready | **1.79×** MLX (fused: 1 memory trip instead of 3) |
+| `layernorm` | ready, not run on Metal yet | expect a tie: MLX already fuses it |
+| `rmsnorm` | ready, not run on Metal yet | expect a tie: MLX already fuses it |
+| `attention` | wip | full fused attention, the real target |
+| `rope` | wip | |
+| `top_k` | wip | |
+
+- ✅ The judge, loop, memory, CLI and app are tested (`pytest`, 38 tests) against a numpy stand-in for the GPU, including the judge catching kernels a KernelBench-style check passes.
+- ✅ On a real M4, the judge killed 12/12 seeded broken softmax kernels; every verified kernel so far is clean on hidden inputs.
+- ⚠️ The improve rounds have not yet beaten round 1 on real hardware. The fix (full scorecard + a ledger of tried ideas) is in; it needs a run to prove it.
+- 🔜 attention, a hacker-fixer pass that attacks the judge before freezing it, hardware counters.
 
 ## Built on the shoulders of
 

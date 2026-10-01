@@ -54,6 +54,36 @@ MUTANTS = [
 ]
 
 
+# The norms share one golden-kernel skeleton (sum, reduce, rsqrt, write), so one list covers both.
+NORM_MUTANTS = [
+    Mutant("fp16_accumulate", "precision", "float s = 0.0f;", "half s = 0.0h;",
+           "sum kept in half: overflows or drifts on big or offset rows"),
+    Mutant("store_through_half", "precision", "o[i] = T(", "o[i] = T((half)",
+           "fp32 outputs rounded to fp16 (escapes allclose 1e-2)"),
+    Mutant("tail_write_dropped", "boundary", "for (int i = tid; i < n; i += TG) { o[i]",
+           "for (int i = tid; i < n - 1; i += TG) { o[i]", "last element never written"),
+    Mutant("tail_sum_dropped", "boundary", "for (int i = tid; i < n; i += TG) { s +=",
+           "for (int i = tid; i < n - 1; i += TG) { s +=", "last element missing from the sum"),
+    Mutant("barrier_removed", "sync",
+           "if (lane == 0) { shared[0] = v; }\n}\nthreadgroup_barrier(mem_flags::mem_threadgroup);\n",
+           "if (lane == 0) { shared[0] = v; }\n}\n", "race: threads read the sum before it is written"),
+    Mutant("partial_simd_reduce", "indexing", "(lane < n_sg) ? shared[lane] : 0.0f",
+           "(lane < n_sg / 2) ? shared[lane] : 0.0f", "half the simdgroups dropped from the sum"),
+    Mutant("wrong_row_stride", "indexing", "device T* o = out + row * n;", "device T* o = out + row * (n - 1);",
+           "rows overlap in the output"),
+    Mutant("eps_dropped", "semantic", "+ eps)", ")", "no eps: zero rows divide by zero, tiny rows blow up"),
+    Mutant("divide_by_n_minus_1", "semantic", "shared[0] / float(n)", "shared[0] / float(n - 1)",
+           "averages over n - 1 instead of n"),
+    Mutant("weight_ignored", "semantic", " * float(w[i])", "", "learned weight never applied"),
+]
+
+MUTANTS_BY_OP = {"layernorm": NORM_MUTANTS, "rmsnorm": NORM_MUTANTS}
+
+
+def has_golden(op: str) -> bool:
+    return (GOLDEN_DIR / f"{op}.metal").exists()
+
+
 def golden(op: str) -> Kernel:
     path = GOLDEN_DIR / f"{op}.metal"
     return Kernel(path.read_text(), configs=[{"TG": 256}], plan="golden reference kernel")
@@ -62,7 +92,7 @@ def golden(op: str) -> Kernel:
 def mutants(op: str) -> list[tuple[Mutant, Kernel]]:
     base = golden(op).source
     out = []
-    for m in MUTANTS:
+    for m in MUTANTS_BY_OP.get(op, MUTANTS):
         old = m.old.replace("float(xr[i])", "(float(xr[i]) * scl + float(mr[i]))") if op == "masked_softmax" else m.old
         new = m.new.replace("float(xr[i])", "(float(xr[i]) * scl + float(mr[i]))") if op == "masked_softmax" else m.new
         if old not in base:

@@ -24,5 +24,23 @@ def test_app_opens_on_home_with_every_op(tmp_path):
         async with app.run_test(size=(180, 50)) as pilot:
             await pilot.pause()
             assert isinstance(app.screen, HomeScreen)
-            assert app.screen.query_one("#ops").option_count == 2
+            from carmen import ops
+            assert app.screen.query_one("#ops").option_count == len(ops.OPS) + len(ops.WIP)
+            assert "softmax" in str(app.screen.query_one("#about").render())
+    asyncio.run(go())
+
+
+def test_wip_rows_do_not_start_a_cook(tmp_path):
+    async def go():
+        from carmen.tui import HomeScreen
+        app = Carmen(runs_dir=tmp_path / "runs", memory_dir=tmp_path / "mem")
+        async with app.run_test(size=(180, 50)) as pilot:
+            await pilot.pause()
+            ol = app.screen.query_one("#ops")
+            ol.highlighted = ol.option_count - 1
+            await pilot.pause()
+            assert "work in progress" in str(app.screen.query_one("#about").render())
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, HomeScreen)
     asyncio.run(go())

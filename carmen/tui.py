@@ -230,8 +230,12 @@ OptionList {{ background: {PANEL}; border: round {EDGE}; padding: 1 1; }}
 OptionList:focus {{ border: round {EDGE_HI}; }}
 OptionList > .option-list--option-highlighted {{ background: #1c1c20; color: {WHITE}; text-style: bold; }}
 OptionList:focus > .option-list--option-highlighted {{ background: #26262b; color: {WHITE}; text-style: bold; }}
-#ops {{ margin: 1 2 0 2; height: auto; max-height: 60%; }}
-#howto {{ margin: 1 4; color: {DIM}; }}
+#intro {{ margin: 1 2 0 2; height: auto; padding: 0 2; }}
+#ops {{ margin: 1 2 0 2; height: auto; max-height: 45%; }}
+HomeScreen #ops {{ padding: 0 1; }}
+#below {{ height: 1fr; min-height: 11; margin: 1 2 0 2; }}
+#loop {{ width: 56; height: 100%; padding: 0 2; }}
+#about {{ width: 1fr; height: 100%; margin-left: 1; padding: 0 2; }}
 .crumb {{ height: 1; margin: 0 2; }}
 #judgelog {{ height: 1fr; margin: 1 2 0 2; }}
 #rail {{ height: 3; padding: 1 2 0 2; }}
@@ -279,13 +283,47 @@ def crumb(here: str) -> Static:
 
 
 # ── home ─────────────────────────────────────────────────────────────────────────
-HOWTO = Text.assemble(
-    ("enter", f"bold {WHITE}"),
-    ("  cook the highlighted op: Carmy drafts 3 kernels, the judge proves or rejects each,\n", DIM),
-    ("       and the best verified one gets improved round by round\n", DIM),
-    ("t    ", f"bold {WHITE}"), ("  trust the judge: watch it catch 12 deliberately broken kernels\n", DIM),
-    ("h    ", f"bold {WHITE}"), ("  history: every past run, every kernel, every verdict\n", DIM),
+INTRO = Text.assemble(
+    ("An AI (", INK), ("Carmy", f"bold {WHITE}"), (") writes GPU kernels for Apple chips. A strict ", INK),
+    ("judge", f"bold {WHITE}"), (" runs each one on your GPU, "
+     "proves it is correct on hundreds of inputs it never saw, and measures real speed against Apple's MLX. ", INK),
+    ("Only proven kernels survive. Each round builds on the best one, and verified lessons carry over.", DIM),
 )
+
+
+def loop_diagram() -> Text:
+    """The self-improving loop, drawn with the return arrow on the left."""
+    t = Text()
+    steps = [("① draft ", "Carmy writes 3 kernels in parallel"),
+             ("② judge ", "correct on 100s of inputs? how fast?"),
+             ("③ keep  ", "fastest proven kernel = champion"),
+             ("④ learn ", "scorecard + what failed + notes")]
+    for i, (name, what) in enumerate(steps):
+        rail = "┌─→ " if i == 0 else "└── " if i == len(steps) - 1 else "│   "
+        t.append(rail, style=GREEN).append(name, style=f"bold {WHITE}").append(f" {what}\n", style=DIM)
+    t.append("\n↺ ", style=f"bold {GREEN}").append("each round builds on the best so far\n", style=INK)
+    t.append("  stops at the chip's speed limit, or when it\n  stops getting faster\n", style=DIM)
+    t.append("  notes are kept, so the next cook starts smarter", style=DIM)
+    return t
+
+
+def about_text(op_id: str, runs: list) -> Text:
+    """Plain-English note on the highlighted kernel."""
+    if op_id.startswith("wip:"):
+        w = next(x for x in ops.WIP if x["name"] == op_id[4:])
+        return Text.assemble((w["name"], f"bold {WHITE}"), ("   work in progress\n\n", AMBER), (w["about"], INK),
+                             ("\n\ncoming soon", DIM))
+    spec = ops.get(op_id)
+    mine = [r for r in runs if r.op == spec.name]
+    best = max((r.summary.get("speedup") or 0 for r in mine), default=0)
+    t = Text.assemble((spec.name, f"bold {WHITE}"), ("\n\n", ""), (spec.about, INK), ("\n\n", ""))
+    if best:
+        t.append_text(Text.assemble(("best so far  ", DIM), speed(best), (" vs MLX\n", DIM)))
+    else:
+        t.append("not cooked yet\n", style=DIM)
+    t.append_text(Text.assemble(("enter", f"bold {WHITE}"), (" cook   ", DIM), ("t", f"bold {WHITE}"),
+                                (" trust the judge   ", DIM), ("h", f"bold {WHITE}"), (" history", DIM)))
+    return t
 
 
 class HomeScreen(Screen):
@@ -295,23 +333,29 @@ class HomeScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield crumb("home")
+        yield Static(INTRO, id="intro", classes="pane")
         yield OptionList(id="ops")
-        yield Static(HOWTO, id="howto")
+        with Horizontal(id="below"):
+            yield Static(loop_diagram(), id="loop", classes="pane")
+            yield Static("", id="about", classes="pane")
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#ops").border_title = "what are we cooking?"
+        self.query_one("#intro").border_title = "what is carmen"
+        self.query_one("#ops").border_title = "pick a kernel to cook"
+        self.query_one("#loop").border_title = "how it works"
+        self.query_one("#about").border_title = "about this kernel"
         self.refresh_ops()
 
     def on_screen_resume(self) -> None:
         self.refresh_ops()
 
     def refresh_ops(self) -> None:
-        runs = load_runs(self.app.runs_dir)
+        self.runs = load_runs(self.app.runs_dir)
         ol = self.query_one("#ops", OptionList)
         ol.clear_options()
         for spec in ops.OPS.values():
-            mine = [r for r in runs if r.op == spec.name]
+            mine = [r for r in self.runs if r.op == spec.name]
             best = max((r.summary.get("speedup") or 0 for r in mine), default=0)
             status = (Text.assemble(("best ", DIM), speed(best),
                                     (f" · verified · {len(mine)} run{'s' if len(mine) != 1 else ''}", DIM))
@@ -319,21 +363,40 @@ class HomeScreen(Screen):
             summary = spec.summary if len(spec.summary) <= 50 else spec.summary[:49] + "…"
             ol.add_option(Option(Text.assemble((f"  {spec.name:<18}", f"bold {WHITE}"), (f"{summary:<54}", DIM),
                                                status), id=spec.name))
+        for w in ops.WIP:
+            ol.add_option(Option(Text.assemble((f"  {w['name']:<18}", FAINT), (f"{w['summary']:<54}", FAINT),
+                                               ("wip", AMBER)), id=f"wip:{w['name']}"))
         ol.highlighted = 0
         ol.focus()
+        self.show_about(self.selected_op())
+
+    def show_about(self, op_id: str) -> None:
+        self.query_one("#about", Static).update(about_text(op_id, self.runs))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        self.show_about(event.option.id)
 
     def selected_op(self) -> str:
         ol = self.query_one("#ops", OptionList)
         return ol.get_option_at_index(ol.highlighted or 0).id
 
+    def _cookable(self, op_id: str) -> bool:
+        if op_id.startswith("wip:"):
+            self.notify(f"{op_id[4:]} is a work in progress: coming soon", severity="warning")
+            return False
+        return True
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.app.push_screen(KitchenScreen(event.option.id))
+        if self._cookable(event.option.id):
+            self.app.push_screen(KitchenScreen(event.option.id))
 
     def action_cook(self) -> None:
-        self.app.push_screen(KitchenScreen(self.selected_op()))
+        if self._cookable(self.selected_op()):
+            self.app.push_screen(KitchenScreen(self.selected_op()))
 
     def action_trust(self) -> None:
-        self.app.push_screen(TrustScreen(self.selected_op()))
+        if self._cookable(self.selected_op()):
+            self.app.push_screen(TrustScreen(self.selected_op()))
 
     def action_history(self) -> None:
         self.app.push_screen(HistoryScreen())
