@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-EPS = {"float32": 2.0**-23, "float16": 2.0**-10}
+EPS = {"float32": 2.0**-23, "float16": 2.0**-10, "bfloat16": 2.0**-7}
 K_BASELINE = 4.0
 C_ACCUM = 8.0
 CAP = 16.0

@@ -13,7 +13,12 @@ try:
 except ImportError as e:  # pragma: no cover - only on machines without MLX
     raise ImportError("the metal backend needs MLX on Apple Silicon: pip install 'carmen[metal]'") from e
 
-_DTYPES = {"float32": mx.float32, "float16": mx.float16}
+_DTYPES = {"float32": mx.float32, "float16": mx.float16, "bfloat16": mx.bfloat16}
+
+
+def _host(a) -> np.ndarray:
+    """numpy can't hold bfloat16: read it back as float32 (exact)."""
+    return np.array(a.astype(mx.float32) if a.dtype == mx.bfloat16 else a)
 
 COPY_KERNEL = """
     uint i = thread_position_in_grid.x;
@@ -37,8 +42,11 @@ class MetalAdapter:
             header=kernel.header,
         )
 
-    def upload(self, inputs):
-        return {k: mx.array(v) for k, v in inputs.items()}
+    def upload(self, inputs, dtype: str = "float32"):
+        def put(k, v):
+            a = mx.array(v)
+            return a.astype(mx.bfloat16) if dtype == "bfloat16" and k != "scale" else a
+        return {k: put(k, v) for k, v in inputs.items()}
 
     def _call(self, built, op, config, dev_inputs, rows, n, dtype, poison: bool = True):
         tg = config["TG"]
@@ -68,13 +76,13 @@ class MetalAdapter:
     def run(self, built, op, config, dev_inputs, rows, n, dtype):
         out = self._call(built, op, config, dev_inputs, rows, n, dtype)
         mx.eval(out)
-        return np.array(out)
+        return _host(out)
 
     def baseline(self, op, dev_inputs):
         def go():
             y = op.mlx_baseline(mx, dev_inputs)
             mx.eval(y)
-            return np.array(y)
+            return _host(y)
         return go
 
     def baseline_launch(self, op, dev_inputs, inner: int = 1, compiled: bool = False):

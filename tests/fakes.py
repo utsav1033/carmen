@@ -9,6 +9,12 @@ from __future__ import annotations
 import numpy as np
 
 from carmen.backends import PAD
+from carmen.ops.base import to_bf16
+
+
+def _store(a, dtype):
+    """What the GPU would hold in a buffer of `dtype` (bf16 kept as exact float32 values)."""
+    return to_bf16(a) if dtype == "bfloat16" else np.asarray(a).astype(dtype)
 
 
 def _softmax32(v):
@@ -108,13 +114,13 @@ class FakeAdapter:
             raise RuntimeError(f"error: use of undeclared identifier '{kernel.source}'")
         return (op.name, KERNELS[kernel.source], kernel.source)
 
-    def upload(self, inputs):
+    def upload(self, inputs, dtype="float32"):
         return inputs
 
     def run(self, built, op, config, dev, rows, n, dtype):
         op_name, fn, name = built
-        out = np.full(rows * n + PAD, np.nan, dtype=dtype)
-        out[: rows * n] = fn(op_name, dev, config).astype(dtype).ravel()
+        out = np.full(rows * n + PAD, np.nan, dtype=np.float32 if dtype == "bfloat16" else dtype)
+        out[: rows * n] = _store(fn(op_name, dev, config), dtype).ravel()
         if name == "writes_past_end":
             out[rows * n] = 0
         return out

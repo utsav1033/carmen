@@ -129,3 +129,19 @@ def test_every_op_has_a_golden_kernel_and_mutants_that_apply():
     for name in ops.OPS:
         ms = broken.mutants(name)
         assert ms and all(k.source != broken.golden(name).source for _, k in ms)
+
+
+def test_bf16_is_in_every_battery_and_round_trips_exactly():
+    from carmen.ops.base import Case, fuzz_cases, hidden_cases, to_bf16
+    for spec in ops.OPS.values():
+        assert any(c.dtype == "bfloat16" for c in spec.visible)
+        assert any(c.dtype == "bfloat16" for c in hidden_cases(spec, 3))
+        assert any(c.dtype == "bfloat16" for c in fuzz_cases(spec, 3))
+        x = spec.materialize(Case("normal", 2, 300, "bfloat16", 1))["x"]
+        assert np.array_equal(x, to_bf16(x))  # already exact bf16 values
+
+
+def test_empty_cases_are_refused():
+    from carmen.ops.base import Case
+    with pytest.raises(ValueError):
+        Case("normal", 0, 64, "float32", 1)

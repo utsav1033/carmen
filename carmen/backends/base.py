@@ -74,8 +74,9 @@ class Adapter(Protocol):
     def build(self, op, kernel: Kernel):
         """Compile the kernel. Raise on compile errors."""
 
-    def upload(self, inputs: dict[str, np.ndarray]):
-        """Move numpy inputs to the device once, so timing excludes transfers."""
+    def upload(self, inputs: dict[str, np.ndarray], dtype: str = "float32"):
+        """Move numpy inputs to the device once, so timing excludes transfers. For bfloat16,
+        inputs arrive as float32 arrays of exact bf16 values and are cast on the device."""
 
     def launch(self, built, op, config: dict, dev_inputs, rows: int, n: int, dtype: str,
                inner: int = 1) -> Callable[[], None]:

@@ -10,14 +10,14 @@ CONTRACT = """\
 Compute y = softmax(x) over each row: y[r, i] = exp(x[r, i] - max_r) / sum_j exp(x[r, j] - max_r).
 
 Buffers (row-major, contiguous):
-  x   : input,  shape (rows, n), element type T (float or half)
+  x   : input,  shape (rows, n), element type T (float, half or bfloat)
   out : output, flat, at least rows * n elements of type T; write out[r * n + i]
 Row length n = x_shape[1]. Rows = x_shape[0].
 
 Semantics that the judge checks exactly:
   - -inf entries contribute 0. A row that is entirely -inf produces NaN in every position (IEEE, as in PyTorch).
   - Inputs can be as large as +/-1e4 (so exp overflows unless you subtract the row max first).
-  - Accumulate in float32 even when T is half.
+  - Accumulate in float32 even when T is half or bfloat.
   - Every one of the rows * n outputs must be written. Nothing past rows * n may be written.
 """
 
@@ -111,6 +111,8 @@ VISIBLE = (
        for k in ("big", "very_negative", "constant", "neg_inf_mask", "all_neg_inf_row", "spike_last")
        for dt in ("float32", "float16")]
     + [Case("normal", 300, 129, "float32", 13, "many_rows")]
+    + [Case("normal", 5, n, "bfloat16", 700 + n, "bf16") for n in (1, 33, 257, 4097)]
+    + [Case(k, 7, 1537, "bfloat16", 47, "bf16") for k in ('big', 'neg_inf_mask', 'all_neg_inf_row')]
 )
 
 SPEC = OpSpec(

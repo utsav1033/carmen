@@ -15,14 +15,14 @@ Compute h = x + res, then y = h / sqrt(mean(h^2) + eps) * w over each row, with 
 Only y is written (this version does not write h back).
 
 Buffers (row-major, contiguous):
-  x   : input,  shape (rows, n), element type T (float or half)
+  x   : input,  shape (rows, n), element type T (float, half or bfloat)
   res : input,  shape (rows, n), element type T (the residual stream)
   w   : input,  shape (n,), element type T (weight, shared by every row)
   out : output, flat, at least rows * n elements of type T; write out[r * n + i]
 Row length n = x_shape[1]. Rows = x_shape[0].
 
 Semantics that the judge checks exactly:
-  - Compute h = float(x) + float(res) in float32; square and accumulate in float32 even when T is half.
+  - Compute h = float(x) + float(res) in float32; square and accumulate in float32 even when T is half or bfloat.
   - x and res can be large with opposite signs, so h can be much smaller than either.
   - A row where h is all zero outputs 0.
   - Every one of the rows * n outputs must be written. Nothing past rows * n may be written.
@@ -92,6 +92,8 @@ VISIBLE = (
        for k in ("big_residual", "cancel", "zero_sum_rows", "small", "outlier")
        for dt in ("float32", "float16")]
     + [Case("normal", 300, 129, "float32", 43, "many_rows")]
+    + [Case("normal", 5, n, "bfloat16", 700 + n, "bf16") for n in (1, 33, 257, 4097)]
+    + [Case(k, 7, 1537, "bfloat16", 47, "bf16") for k in ('cancel', 'big_residual', 'outlier')]
 )
 
 SPEC = OpSpec(

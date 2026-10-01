@@ -16,7 +16,7 @@ CONTRACT = """\
 Compute y = softmax(x * scale + mask) over each row, where mask is additive (0 or -inf, but any finite value is allowed).
 
 Buffers (row-major, contiguous):
-  x     : input,  shape (rows, n), element type T (float or half)
+  x     : input,  shape (rows, n), element type T (float, half or bfloat)
   mask  : input,  shape (rows, n), element type T
   scale : input,  shape (1,), float32 scalar
   out   : output, flat, at least rows * n elements of type T; write out[r * n + i]
@@ -25,7 +25,7 @@ Row length n = x_shape[1]. Rows = x_shape[0].
 Semantics that the judge checks exactly:
   - Compute v = float(x) * scale + float(mask) in float32, then a numerically safe softmax of v.
   - Masked (-inf) positions output exactly 0. A fully masked row produces NaN in every position (IEEE, as in PyTorch).
-  - Accumulate in float32 even when T is half.
+  - Accumulate in float32 even when T is half or bfloat.
   - Every one of the rows * n outputs must be written. Nothing past rows * n may be written.
 """
 
@@ -106,6 +106,8 @@ VISIBLE = (
        for k in ("causal", "big", "fully_masked_row", "bias_mask")
        for dt in ("float32", "float16")]
     + [Case("normal", 256, 129, "float32", 19, "many_rows")]
+    + [Case("normal", 5, n, "bfloat16", 700 + n, "bf16") for n in (1, 33, 257, 4097)]
+    + [Case(k, 7, 1537, "bfloat16", 47, "bf16") for k in ('causal', 'fully_masked_row', 'big')]
 )
 
 SPEC = OpSpec(

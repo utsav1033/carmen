@@ -12,7 +12,19 @@ from typing import Callable
 
 import numpy as np
 
-DTYPES = ("float32", "float16")
+DTYPES = ("float32", "float16", "bfloat16")
+ITEMSIZE = {"float32": 4, "float16": 2, "bfloat16": 2}
+
+
+def to_bf16(a: np.ndarray) -> np.ndarray:
+    """Round float32 values to the nearest bfloat16 (ties to even), kept as float32.
+
+    numpy has no bfloat16, so bf16 inputs live as float32 arrays holding exactly
+    representable bf16 values; the adapter casts them on upload, losslessly."""
+    a = np.asarray(a, dtype=np.float32)
+    b = a.view(np.uint32).astype(np.uint64)
+    r = ((b + 0x7FFF + ((b >> 16) & 1)) & 0xFFFF0000).astype(np.uint32).view(np.float32)
+    return np.where(np.isnan(a), a, r)
 
 
 @dataclass(frozen=True)
@@ -29,6 +41,12 @@ class Case:
     dtype: str
     seed: int
     family: str = ""
+
+    def __post_init__(self):
+        # The harness never launches on an empty tensor: zero threadgroups would mean the
+        # kernel never runs, so there would be nothing to judge.
+        if self.rows < 1 or self.n < 1:
+            raise ValueError(f"empty case {self.rows}x{self.n}: rows and n must be >= 1")
 
     def with_shape(self, rows: int, n: int) -> "Case":
         return Case(self.kind, rows, n, self.dtype, self.seed, self.family)
@@ -79,11 +97,14 @@ class OpSpec:
 
     def materialize(self, case: Case) -> dict[str, np.ndarray]:
         rng = np.random.default_rng(case.seed)
-        return self.generators[case.kind](rng, case.rows, case.n, case.dtype)
+        if case.dtype != "bfloat16":
+            return self.generators[case.kind](rng, case.rows, case.n, case.dtype)
+        d = self.generators[case.kind](rng, case.rows, case.n, "float32")
+        return {k: v if k == "scale" else to_bf16(v) for k, v in d.items()}
 
     def bytes_moved(self, rows: int, n: int, dtype: str) -> int:
         """Minimum memory traffic: read every input once, write the output once."""
-        item = np.dtype(dtype).itemsize
+        item = ITEMSIZE[dtype]
         streamed = self.streamed if self.streamed is not None else [k for k in self.input_names if k != "scale"]
         per_row_inputs = len(streamed)
         return rows * n * item * (per_row_inputs + 1)
@@ -105,7 +126,7 @@ def fuzz_cases(spec: OpSpec, seed: int, count: int = 8) -> list[Case]:
         kind = spec.fuzz_kinds[i % len(spec.fuzz_kinds)]
         n = off_grid_n(rng, 2, 6000)
         rows = int(rng.integers(1, 48))
-        out.append(Case(kind, rows, n, DTYPES[i % 2], int(rng.integers(2**31)), "fuzz"))
+        out.append(Case(kind, rows, n, DTYPES[i % len(DTYPES)], int(rng.integers(2**31)), "fuzz"))
     return out
 
 
@@ -117,7 +138,7 @@ def hidden_cases(spec: OpSpec, secret_seed: int, count: int = 24) -> list[Case]:
         kind = spec.hidden_kinds[i % len(spec.hidden_kinds)]
         n = off_grid_n(rng, 3, 20000)
         rows = int(rng.integers(1, 64))
-        out.append(Case(kind, rows, n, DTYPES[i % 2], int(rng.integers(2**31)), "hidden"))
+        out.append(Case(kind, rows, n, DTYPES[i % len(DTYPES)], int(rng.integers(2**31)), "hidden"))
     return out
 
 

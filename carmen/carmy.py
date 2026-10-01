@@ -23,7 +23,7 @@ How your kernel runs:
 (element type T; `scale` is float), the output is `device T* out`, and `x_shape` (`const constant int*`) gives \
 the input shape. MLX puts small inputs in the `constant` address space and large ones in `device`, so never \
 spell out an input pointer's address space: write `auto xr = x + row * n;`.
-- T is float or half. The harness launches one threadgroup per row: grid = (rows * TG, 1, 1), \
+- T is float, half or bfloat (bfloat16: float32's range with 8 bits of precision). The harness launches one threadgroup per row: grid = (rows * TG, 1, 1), \
 threadgroup = (TG, 1, 1). TG is a template constant you choose per config (a multiple of 32, at most 1024).
 - You may declare extra integer template constants (for example N_READS) and give up to 6 configs; \
 the harness checks every config for correctness, drops failing ones, and keeps the fastest.

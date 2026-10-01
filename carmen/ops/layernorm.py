@@ -14,14 +14,14 @@ Compute y = (x - mean) / sqrt(var + eps) * w + b over each row, with eps = 1e-5.
 mean = sum_i x[r, i] / n and var = sum_i (x[r, i] - mean)^2 / n (biased: divide by n, not n - 1).
 
 Buffers (row-major, contiguous):
-  x   : input,  shape (rows, n), element type T (float or half)
+  x   : input,  shape (rows, n), element type T (float, half or bfloat)
   w   : input,  shape (n,), element type T (weight, shared by every row)
   b   : input,  shape (n,), element type T (bias, shared by every row)
   out : output, flat, at least rows * n elements of type T; write out[r * n + i]
 Row length n = x_shape[1]. Rows = x_shape[0].
 
 Semantics that the judge checks exactly:
-  - Accumulate in float32 even when T is half.
+  - Accumulate in float32 even when T is half or bfloat.
   - Rows can sit far from zero (a large common offset), so compute the variance from (x - mean),
     not as E[x^2] - mean^2, which cancels catastrophically.
   - A row with zero variance (constant, or n = 1) outputs b.
@@ -95,6 +95,8 @@ VISIBLE = (
        for k in ("offset", "large", "small", "zero_rows", "wild_params")
        for dt in ("float32", "float16")]
     + [Case("normal", 300, 129, "float32", 29, "many_rows")]
+    + [Case("normal", 5, n, "bfloat16", 700 + n, "bf16") for n in (1, 33, 257, 4097)]
+    + [Case(k, 7, 1537, "bfloat16", 47, "bf16") for k in ('offset', 'small', 'zero_rows')]
 )
 
 SPEC = OpSpec(

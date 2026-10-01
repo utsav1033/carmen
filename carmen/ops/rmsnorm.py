@@ -13,13 +13,13 @@ CONTRACT = """\
 Compute y = x / sqrt(mean(x^2) + eps) * w over each row, with eps = 1e-5 and mean(x^2) = sum_i x[r, i]^2 / n.
 
 Buffers (row-major, contiguous):
-  x   : input,  shape (rows, n), element type T (float or half)
+  x   : input,  shape (rows, n), element type T (float, half or bfloat)
   w   : input,  shape (n,), element type T (weight, shared by every row)
   out : output, flat, at least rows * n elements of type T; write out[r * n + i]
 Row length n = x_shape[1]. Rows = x_shape[0].
 
 Semantics that the judge checks exactly:
-  - Square and accumulate in float32 even when T is half (x^2 overflows half for |x| > 256).
+  - Square and accumulate in float32 even when T is half or bfloat (x^2 overflows half for |x| > 256).
   - An all-zero row outputs 0.
   - Every one of the rows * n outputs must be written. Nothing past rows * n may be written.
 """
@@ -85,6 +85,8 @@ VISIBLE = (
        for k in ("large", "small", "zero_rows", "wild_params", "outlier")
        for dt in ("float32", "float16")]
     + [Case("normal", 300, 129, "float32", 37, "many_rows")]
+    + [Case("normal", 5, n, "bfloat16", 700 + n, "bf16") for n in (1, 33, 257, 4097)]
+    + [Case(k, 7, 1537, "bfloat16", 47, "bf16") for k in ('large', 'outlier', 'small')]
 )
 
 SPEC = OpSpec(

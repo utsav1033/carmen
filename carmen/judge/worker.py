@@ -31,7 +31,7 @@ class Prepared:
         self.case = case
         self.inputs = op.materialize(case)
         self.ref = op.reference(self.inputs)
-        self.dev = adapter.upload(self.inputs)
+        self.dev = adapter.upload(self.inputs, case.dtype)
         base = adapter.baseline(op, self.dev)()
         base_err = check.row_relative_error(np.asarray(base, dtype=np.float64), self.ref)
         self.tol = check.tolerance(case.dtype, case.n, base_err)
@@ -81,7 +81,15 @@ def _correctness(adapter, op, built, cfg, prepared: list[Prepared], shrink: bool
         if not cmp.ok:
             failures.append({"case": p.case.label(), "family": p.case.family, **cmp.to_json()})
     if not failures:
-        big = [p for p in prepared if p.valid and p.case.n >= 257][:2]
+        # Races show up as output that changes between identical runs. More inputs, more
+        # chances: the largest cases of different kinds and dtypes, not just the first two.
+        big = sorted((p for p in prepared if p.valid and p.case.n >= 257), key=lambda p: -p.case.rows * p.case.n)
+        seen, picks = set(), []
+        for p in big:
+            if (p.case.kind, p.case.dtype) not in seen:
+                seen.add((p.case.kind, p.case.dtype))
+                picks.append(p)
+        big = picks[:4]
         for p in big:
             outs = [adapter.run(built, op, cfg, p.dev, p.case.rows, p.case.n, p.case.dtype).tobytes()
                     for _ in range(DETERMINISM_RUNS)]
