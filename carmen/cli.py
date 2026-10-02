@@ -215,6 +215,37 @@ def cmd_bench(args) -> int:
     return 0
 
 
+def cmd_profile(args) -> int:
+    from . import profile as prof
+    ui.banner(f"profile · {args.model}")
+    p = prof.run(args.model, args.prompt, args.gen, on_progress=lambda m: print(ui.s("  " + m, "grey")))
+    sp = p.spec
+    quant = f"{sp.bits}-bit weights (groups of {sp.group_size})" if sp.bits else "unquantized weights"
+    print(f"\n{ui.s(sp.model, 'bold')}: {sp.layers} layers · hidden {sp.hidden} · {sp.heads} heads / "
+          f"{sp.kv_heads} kv heads · head {sp.head_dim} · mlp {sp.mlp} · {quant} · activations {sp.dtype} · "
+          f"norm eps {sp.norm_eps}")
+    print(f"prefill {ui.s(f'{p.prefill_tps:,.0f} tok/s', 'bold')} ({p.prompt_tokens}-token prompt) · "
+          f"decode {ui.s(f'{p.decode_tps:,.1f} tok/s', 'bold')} ({p.gen_tokens} tokens)")
+    for title, steps, measured_ms in (("writing one word (decode)", p.decode, 1e3 / p.decode_tps),
+                                      (f"reading the prompt (prefill, {p.prompt_tokens} tokens)", p.prefill,
+                                       1e3 * p.prompt_tokens / p.prefill_tps)):
+        ui.rule(title)
+        rows = prof.table(steps, measured_ms)
+        body, total = rows[:-1], rows[-1]
+        ui.table(["step", "each", "x", "total", "share", "carmen"],
+                 [[r["step"], f"{r['us_each']:7.1f} us", r["times"], f"{r['ms_total']:7.3f} ms",
+                   ui.pct(r["share"]), ui.s(r["carmen"] or "", "green")] for r in body], align="lrrrrl")
+        cov = total.get("coverage")
+        print(ui.s(f"  steps add up to {total['ms_total']:.2f} ms vs {measured_ms:.2f} ms measured"
+                   + (f" ({cov:.0%})" if cov else ""), "grey"))
+        print("  by kind: " + "  ".join(f"{k} {v:.0%}" for k, v in prof.by_kind(steps).items()))
+    launches = sum(s.per_token for s in p.decode)  # each step is at least one kernel
+    print(ui.s(f"\nsmallest possible kernel on this GPU: {p.kernel_floor_us:.1f} us. ~{launches} step launches per "
+               f"word (at least) -> {launches * p.kernel_floor_us / 1e3:.2f} ms of every word is launch overhead.", "grey"))
+    print(ui.s(f"saved {prof.save(p, Path(args.runs))}", "grey"))
+    return 0
+
+
 def cmd_report(args) -> int:
     sm = json.loads((Path(args.run) / "summary.json").read_text())
     sm.setdefault("run_dir", args.run)
@@ -325,6 +356,13 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="runs/bench")
     p.add_argument("--yes", action="store_true", help="don't ask before starting")
     p.set_defaults(fn=cmd_bench)
+
+    p = sub.add_parser("profile", help="where a real model spends its time on this Mac (needs mlx-lm)")
+    p.add_argument("model", nargs="?", default="mlx-community/Qwen2.5-0.5B-Instruct-4bit")
+    p.add_argument("--prompt", type=int, default=512, help="prompt length in tokens")
+    p.add_argument("--gen", type=int, default=128, help="tokens to generate")
+    p.add_argument("--runs", default="runs")
+    p.set_defaults(fn=cmd_profile)
 
     p = sub.add_parser("report", help="summarize a run")
     p.add_argument("run")

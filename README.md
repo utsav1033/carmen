@@ -154,6 +154,7 @@ Run **`carmen`** with no arguments. It follows one path:
 | `carmen broken <op>` | run 10-12 seeded broken kernels (per op) through the judge *and* through a KernelBench-style check, side by side |
 | `carmen run <op>` | the self-correcting loop; `--mode bon` runs the best-of-N control arm at the same budget |
 | `carmen bench [ops]` | loop vs best-of-N on the same budget, repeated, one table (`bench.md`) ready to paste here |
+| `carmen profile [model]` | load a real model with mlx-lm (default Qwen2.5-0.5B 4-bit), measure prefill and decode tok/s, and time every step of a layer at its real shapes, so you know which kernels are worth writing (`pip install 'carmen[models]'`) |
 | `carmen report <run>` | the numbers below, for one run |
 | `carmen playbook` | what Carmy has learned, and how much each lesson is worth |
 
