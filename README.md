@@ -66,6 +66,8 @@ Every row is a failure mode documented in the papers below or seen in practice. 
 
 <p align="center"><img src="assets/home.webp" alt="carmen's terminal app" width="90%"></p>
 
+New to kernels? [**How it all works**](docs/how-it-works.md) explains LLMs, GPUs, kernels and carmen from scratch.
+
 ## Install
 
 On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
