@@ -13,6 +13,8 @@ from typing import Callable
 import numpy as np
 
 DTYPES = ("float32", "float16", "bfloat16")
+# Scalar parameters passed as one-element float32 arrays, whatever the element type T.
+SCALAR_INPUTS = ("scale", "eps")
 ITEMSIZE = {"float32": 4, "float16": 2, "bfloat16": 2}
 
 
@@ -116,6 +118,9 @@ class OpSpec:
     # Op-specific size draws: fn(rng, purpose) -> (rows, n, inner), purpose in fuzz | hidden | timing.
     # None = the generic draws below.
     sizes: Callable | None = None
+    # Outputs of shape (rows, n) each, stacked in one buffer: out = [first; second; ...].
+    # The reference returns them stacked too, shape (outputs * rows, n).
+    outputs: int = 1
 
     def grid(self, rows: int, n: int, config: dict) -> tuple[tuple, tuple]:
         if self.launch:
@@ -136,7 +141,7 @@ class OpSpec:
         if case.dtype != "bfloat16":
             return gen(rng, case.rows, case.n, case.dtype, **extra)
         d = gen(rng, case.rows, case.n, "float32", **extra)
-        return {k: v if k == "scale" else to_bf16(v) for k, v in d.items()}
+        return {k: v if k in SCALAR_INPUTS else to_bf16(v) for k, v in d.items()}
 
     def bytes_moved(self, rows: int, n: int, dtype: str, inner: int = 0) -> int:
         """Minimum memory traffic: read every input once, write the output once."""

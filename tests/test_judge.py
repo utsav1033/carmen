@@ -21,7 +21,7 @@ def run(source, op="softmax", configs=None, hidden_seed=None):
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul", "attention"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul", "attention", "residual_rmsnorm"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -205,3 +205,10 @@ def test_carmy_asks_for_enough_tokens_for_hard_kernels(monkeypatch):
     from carmen import carmy
     monkeypatch.delenv("CARMEN_MAX_TOKENS", raising=False)
     assert carmy._request("s", "p", {}, "m", "high")["max_tokens"] >= 64000
+
+
+def test_residual_rmsnorm_writes_both_outputs_and_catches_a_hardcoded_eps():
+    assert run("good", "residual_rmsnorm")["correct"]
+    v = run("eps_hardcoded", "residual_rmsnorm")
+    assert not v["correct"]
+    assert any(f["case"].startswith("tiny_rows") for c in v["configs"] for f in c["failures"])

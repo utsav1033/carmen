@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 
+from ..ops.base import SCALAR_INPUTS
 from .base import PAD, Kernel
 
 try:
@@ -45,7 +46,7 @@ class MetalAdapter:
     def upload(self, inputs, dtype: str = "float32"):
         def put(k, v):
             a = mx.array(v)
-            return a.astype(mx.bfloat16) if dtype == "bfloat16" and k != "scale" else a
+            return a.astype(mx.bfloat16) if dtype == "bfloat16" and k not in SCALAR_INPUTS else a
         return {k: put(k, v) for k, v in inputs.items()}
 
     def _call(self, built, op, config, dev_inputs, rows, n, dtype, poison: bool = True):
@@ -58,7 +59,7 @@ class MetalAdapter:
             # Carmy never picks the grid, which rules out MLX's silent dispatch truncation.
             grid=grid,
             threadgroup=threadgroup,
-            output_shapes=[(rows * n + PAD,)],
+            output_shapes=[(op.outputs * rows * n + PAD,)],
             output_dtypes=[_DTYPES[dtype]],
             # Correctness runs pre-fill the output with NaN so unwritten elements show up.
             # Timing runs must not: the fill is an extra full write the stock op never pays.
@@ -82,6 +83,8 @@ class MetalAdapter:
         def go():
             y = op.mlx_baseline(mx, dev_inputs)
             mx.eval(y)
+            if isinstance(y, (tuple, list)):  # several outputs: stacked, as the reference is
+                return np.concatenate([_host(a).reshape(-1, a.shape[-1]) for a in y])
             return _host(y)
         return go
 
@@ -90,8 +93,10 @@ class MetalAdapter:
         if compiled:
             # mx.compile fuses chains of element-wise ops (e.g. x * scale + mask) into one kernel:
             # the strongest stock baseline a user gets without writing Metal.
-            names = list(dev_inputs)
-            fused = mx.compile(lambda *arrs: op.mlx_baseline(mx, dict(zip(names, arrs))))
+            # eps is a Python number to the stock op; read it before tracing (no reads inside compile).
+            consts = {"eps": float(dev_inputs["eps"].item())} if "eps" in dev_inputs else {}
+            names = [k for k in dev_inputs if k not in consts]
+            fused = mx.compile(lambda *arrs: op.mlx_baseline(mx, {**dict(zip(names, arrs)), **consts}))
             fn = lambda d: fused(*[d[k] for k in names])  # noqa: E731
 
         def go():

@@ -1,9 +1,9 @@
 from .base import Case, OpSpec
-from . import add_rmsnorm, attention, layernorm, masked_softmax, matmul, rmsnorm, softmax
+from . import add_rmsnorm, attention, residual_rmsnorm, layernorm, masked_softmax, matmul, rmsnorm, softmax
 
 OPS: dict[str, OpSpec] = {s.name: s for s in (softmax.SPEC, masked_softmax.SPEC, layernorm.SPEC, rmsnorm.SPEC,
                                        add_rmsnorm.SPEC, matmul.SPEC,
-                                       attention.SPEC)}
+                                       attention.SPEC, residual_rmsnorm.SPEC)}
 
 # Shown in the app as work in progress: not cookable yet. Each needs a reference, test inputs
 # and a baseline before the judge can grade it.

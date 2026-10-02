@@ -54,6 +54,10 @@ def _attention32(inputs, offset_aware=True):
 
 
 def good(op_name, inputs, cfg):
+    if op_name == "residual_rmsnorm":
+        h = inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32)
+        y = h / np.sqrt((h * h).mean(axis=-1, keepdims=True) + inputs["eps"][0]) * inputs["w"].astype(np.float32)
+        return np.concatenate([h, y])
     if op_name == "attention":
         return _attention32(inputs)
     if op_name == "matmul":
@@ -128,9 +132,15 @@ def cache_offset_ignored(op_name, inputs, cfg):
     return _attention32(inputs, offset_aware=False)
 
 
+def eps_hardcoded(op_name, inputs, cfg):
+    """residual_rmsnorm with Llama's eps baked in: right only when the model's eps is 1e-5."""
+    return good(op_name, {**inputs, "eps": np.array([1e-5], np.float32)}, cfg)
+
+
 KERNELS = {f.__name__: f for f in (good, no_max_subtraction, drops_last_element, stores_through_fp16,
                                     racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance,
-                                    wrong_leading_dim, cache_offset_ignored)}
+                                    wrong_leading_dim, cache_offset_ignored,
+                                    eps_hardcoded)}
 
 
 class FakeAdapter:
@@ -149,10 +159,11 @@ class FakeAdapter:
 
     def run(self, built, op, config, dev, rows, n, dtype):
         op_name, fn, name = built
-        out = np.full(rows * n + PAD, np.nan, dtype=np.float32 if dtype == "bfloat16" else dtype)
-        out[: rows * n] = _store(fn(op_name, dev, config), dtype).ravel()
+        size = op.outputs * rows * n
+        out = np.full(size + PAD, np.nan, dtype=np.float32 if dtype == "bfloat16" else dtype)
+        out[:size] = _store(fn(op_name, dev, config), dtype).ravel()
         if name == "writes_past_end":
-            out[rows * n] = 0
+            out[size] = 0
         return out
 
     def launch(self, built, op, config, dev, rows, n, dtype, inner=1):

@@ -118,7 +118,19 @@ ATTENTION_MUTANTS = [
     Mutant("not_normalized", "semantic", "T(acc / l)", "T(acc)", "weighted sum never divided by the softmax total"),
 ]
 
+_SHARED_NORM = [m for m in NORM_MUTANTS if m.name not in ("eps_dropped", "wrong_row_stride")]
+
 MUTANTS_BY_OP = {
+    "residual_rmsnorm": _SHARED_NORM + [
+        Mutant("eps_dropped", "semantic", "+ eps[0])", ")", "no eps: zero rows divide by zero"),
+        Mutant("eps_hardcoded", "semantic", "+ eps[0])", "+ 1e-5f)", "eps fixed at Llama's 1e-5: wrong for Qwen's 1e-6"),
+        Mutant("residual_tail_unwritten", "boundary", "for (int i = tid; i < n; i += TG) { hsum[i]",
+               "for (int i = tid; i < n - 1; i += TG) { hsum[i]", "last element of h never written"),
+        Mutant("y_overwrites_h", "indexing", "device T* o = out + (rows + row) * n;", "device T* o = out + row * n;",
+               "y written over h: the residual is lost"),
+        Mutant("residual_not_added", "semantic", "hsum[i] = T(float(xr[i]) + float(rr[i]));", "hsum[i] = T(float(xr[i]));",
+               "h is x alone: the block's output never joins the residual"),
+    ],
     "attention": ATTENTION_MUTANTS,
     "matmul": MATMUL_MUTANTS,
     "layernorm": NORM_MUTANTS,
