@@ -246,6 +246,49 @@ def cmd_profile(args) -> int:
     return 0
 
 
+def cmd_e2e(args) -> int:
+    from . import e2e
+    ui.banner(f"e2e · {args.model}")
+    kernel = config = kernel_id = None
+    modes = [m.strip() for m in args.modes.split(",")]
+    if any(m in ("kernel", "both") for m in modes):
+        if args.kernel == "golden":
+            kernel = broken.golden(e2e.OP)
+            config, kernel_id = kernel.configs[0], "golden reference kernel"
+        else:
+            found = e2e.latest_champion(Path(args.runs))
+            if not found:
+                print(f"{ui.BAD} no {e2e.OP} champion in {args.runs}: run `carmen run {e2e.OP}` or pass --kernel golden")
+                return 2
+            kernel, config, kernel_id, verdict = found
+            print(f"kernel: {ui.s(kernel_id, 'bold')} (champion of your latest {e2e.OP} run), config {config}")
+            for r in verdict.get("timing", []):
+                print(ui.s(f"  on its own at {'x'.join(map(str, r['shape']))} {r['dtype']}: "
+                           f"{r['speedup']:.2f}x vs MLX", "grey"))
+    if "stock" not in modes:
+        modes = ["stock"] + modes  # every comparison is against stock
+    results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
+                      on_progress=lambda m: print(ui.s("  " + m, "grey")))
+    stock = results[0]
+    ui.rule("result")
+    rows = []
+    for r in results:
+        if r.mode == "stock":
+            rows.append([r.mode, f"{r.prefill_tps:,.0f}", f"{r.decode_tps:,.1f}", "", "reference"])
+            continue
+        same = r.tokens_match == r.tokens_total
+        answers = (ui.s(f"{ui.OK} same {r.tokens_total} tokens", "green") if same else
+                   ui.s(f"diverge at token {r.tokens_match + 1}", "yellow"))
+        rows.append([r.mode, f"{r.prefill_tps:,.0f}", f"{r.decode_tps:,.1f}",
+                     ui.speed(r.decode_tps / stock.decode_tps),
+                     answers + ui.s(f"  (first logits within {r.max_logit_diff:.3g})", "grey")])
+    ui.table(["mode", "prefill tok/s", "decode tok/s", "decode vs stock", "outputs vs stock"], rows, align="lrrrl")
+    print(ui.s("\nfp16/bf16 rounding can flip a near-tie between two words, so a late divergence with a tiny "
+               "logit difference is rounding, not a bug; an early one with a large difference is a bug.", "grey"))
+    print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs))}", "grey"))
+    return 0
+
+
 def cmd_report(args) -> int:
     sm = json.loads((Path(args.run) / "summary.json").read_text())
     sm.setdefault("run_dir", args.run)
@@ -363,6 +406,16 @@ def main(argv=None) -> int:
     p.add_argument("--gen", type=int, default=128, help="tokens to generate")
     p.add_argument("--runs", default="runs")
     p.set_defaults(fn=cmd_profile)
+
+    p = sub.add_parser("e2e", help="run a real model stock vs with carmen's changes: tok/s and same answers?")
+    p.add_argument("model", nargs="?", default="mlx-community/Qwen2.5-0.5B-Instruct-4bit")
+    p.add_argument("--modes", default="stock,plumbing,kernel,both")
+    p.add_argument("--kernel", default="latest", help="latest = champion of your newest residual_rmsnorm run; or golden")
+    p.add_argument("--prompt", type=int, default=512)
+    p.add_argument("--gen", type=int, default=128)
+    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--runs", default="runs")
+    p.set_defaults(fn=cmd_e2e)
 
     p = sub.add_parser("report", help="summarize a run")
     p.add_argument("run")

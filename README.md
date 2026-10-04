@@ -31,7 +31,7 @@ Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fre
 - **On hard kernels the model didn't make mistakes, it hit Apple's ceiling.** All 28 matmul and attention kernels that compiled were correct on visible and hidden inputs. Speed is where they fall short: 0.93× of MLX's matmul, 0.54× of its fused attention.
 - **The judge caught real mistakes, and one of ours.** Of 96 bench kernels, 2 were wrong (an infinity mismatch, unwritten output) and 1 didn't compile; all were rejected. 12 more were rejected by an over-strict rule that banned `#pragma unroll`, a harmless speed hint. That rule is fixed: the judge has to be fair, not just strict.
 
-**The judge is measured too:** 41 realistic bugs planted across softmax, add_rmsnorm, matmul and attention, run on an M4. A KernelBench-style check (one shape, `allclose`) passed **22 of them at 1e-2, and 12 even at the strict 1e-4**. carmen's judge caught **all 41**, and said where each one was. Two matmul bugs (wrong leading dimension, swapped tile axes) are exactly right on square matrices, so a one-shape square check can never see them.
+**The judge is measured too:** 54 realistic bugs planted across softmax, add_rmsnorm, matmul, attention and residual_rmsnorm, run on an M4. A KernelBench-style check (one shape, `allclose`) passed **28 of them at 1e-2, and 14 even at the strict 1e-4**. carmen's judge caught **all 54**, and said where each one was. Two matmul bugs (wrong leading dimension, swapped tile axes) are exactly right on square matrices, so a one-shape square check can never see them.
 
 | kernel | seeded bugs | carmen caught | one-shape check passed (1e-2) | one-shape check passed (1e-4) |
 |---|---|---|---|---|
@@ -39,6 +39,7 @@ Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fre
 | add_rmsnorm | 11 | **11** | 5 | 1 |
 | matmul | 8 | **8** | 4 | 2 |
 | attention | 10 | **10** | 3 | 2 |
+| residual_rmsnorm | 13 | **13** | 6 | 2 |
 
 ## Where AI-written kernels fail, and how carmen catches each one
 
@@ -157,6 +158,7 @@ Run **`carmen`** with no arguments. It follows one path:
 | `carmen run <op>` | the self-correcting loop; `--mode bon` runs the best-of-N control arm at the same budget |
 | `carmen bench [ops]` | loop vs best-of-N on the same budget, repeated, one table (`bench.md`) ready to paste here |
 | `carmen profile [model]` | load a real model with mlx-lm (default Qwen2.5-0.5B 4-bit), measure prefill and decode tok/s, and time every step of a layer at its real shapes, so you know which kernels are worth writing (`pip install 'carmen[models]'`) |
+| `carmen e2e [model]` | run a real model four ways (stock, merged gate+up, carmen's residual_rmsnorm swapped into every layer, both) and report prefill/decode tok/s and whether the answers still match stock |
 | `carmen report <run>` | the numbers below, for one run |
 | `carmen playbook` | what Carmy has learned, and how much each lesson is worth |
 
