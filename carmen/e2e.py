@@ -1,17 +1,23 @@
 """`carmen e2e <model>`: does a real model get faster, with the same answers?
 
-Runs one model four ways and compares each against stock MLX:
+Runs one model several ways and compares each against stock MLX:
 
   stock     the model as mlx-lm loads it
   plumbing  gate and up projections merged into one matmul per layer (weights concatenated once)
+  compile   the part of each layer after attention (residual add, norm, MLP, residual add) built
+            once with mx.compile instead of op by op in Python every word; attention stays as is
+            (its KV cache grows every word, which mx.compile can't follow)
   kernel    carmen's residual_rmsnorm swapped into every layer: the residual add and the norm
-            after it become one kernel, twice per layer (mid-layer, and the end of a layer fused
-            with the next layer's input norm), so 4 small kernels per layer become 2
-  both      plumbing + kernel
+            after it become one kernel, twice per layer, so 4 small kernels per layer become 2
+  all       plumbing + compile + kernel
+Modes combine with +, e.g. plumbing+compile.
 
-For each: prefill and decode tokens/s, and whether the outputs still match stock (the same
-greedy tokens, and how far the first logits moved). A faster model with different answers is
-reported as broken, not faster.
+Every version is loaded up front and they take turns (stock, plumbing, ..., then again), so a
+Mac that heats up or slows down mid-run hits every mode alike. Each mode reports its median and
+its range over the turns; a gain is real only when the ranges don't overlap.
+
+Also reports the decode speed limit: every word reads every weight once, so tokens/s can't beat
+(measured memory bandwidth / weight bytes). The gap between that and stock is what's left to win.
 """
 
 from __future__ import annotations
@@ -24,19 +30,56 @@ from pathlib import Path
 from .backends import Kernel
 from .profile import PROMPT_TEXT
 
-MODES = ("stock", "plumbing", "kernel", "both")
+MODES = ("stock", "plumbing", "compile", "kernel", "all")
+PARTS = ("plumbing", "compile", "kernel")
 OP = "residual_rmsnorm"
+
+
+def parts(mode: str) -> set[str]:
+    """Which changes a mode applies: 'all' is every one, 'both' is plumbing+kernel, else split on +."""
+    if mode == "stock":
+        return set()
+    if mode == "all":
+        return set(PARTS)
+    if mode == "both":
+        return {"plumbing", "kernel"}
+    got = set(mode.split("+"))
+    bad = got - set(PARTS)
+    if bad:
+        raise SystemExit(f"unknown e2e mode part(s) {sorted(bad)}: use stock, all, or {'+'.join(PARTS)} combined with +")
+    return got
 
 
 @dataclass
 class Result:
     mode: str
-    prefill_tps: float
+    prefill_tps: float  # median over the turns
     decode_tps: float
     tokens_match: int | None = None  # how many generated tokens equal stock's, from the start
     tokens_total: int = 0
     max_logit_diff: float | None = None  # first-step logits vs stock
     same_first_token: bool | None = None
+    decode_lo: float | None = None  # slowest and fastest turn
+    decode_hi: float | None = None
+    prefill_lo: float | None = None
+    prefill_hi: float | None = None
+    turns: int = 1
+    weight_bytes: int | None = None  # stock only: bytes every decoded word must read
+
+
+def beyond_noise(r: Result, stock: Result) -> str:
+    """'faster' or 'slower' only when this mode's range clears stock's; else 'within noise'."""
+    if None in (r.decode_lo, r.decode_hi, stock.decode_lo, stock.decode_hi):
+        return "unknown"
+    if r.decode_lo > stock.decode_hi:
+        return "faster"
+    if r.decode_hi < stock.decode_lo:
+        return "slower"
+    return "within noise"
+
+
+def speed_limit_tps(weight_bytes: int, peak_gbps: float) -> float:
+    return peak_gbps * 1e9 / weight_bytes
 
 
 # ── which kernel to use ─────────────────────────────────────────────────────────────
@@ -210,28 +253,38 @@ class CallTiming:
     error: str | None = None
 
 
+WARMUP_S = 0.5  # Apple GPUs clock up under sustained load; short bursts run at whatever clock they find
+
+
+def _chain_once(mx, f, x0, r) -> tuple[float, float]:
+    """(total us, python us) per call, over CALL_CHAIN dependent calls like one word of decode."""
+    x, h = x0, None
+    t0 = time.perf_counter()
+    for _ in range(CALL_CHAIN):  # each call feeds the next, like layers in a model
+        h, x = f(x, r)
+    t1 = time.perf_counter()
+    mx.eval([h, x])
+    t2 = time.perf_counter()
+    return (t2 - t0) / CALL_CHAIN * 1e6, (t1 - t0) / CALL_CHAIN * 1e6
+
+
+def _warm(mx, fns, x0, r, seconds: float = WARMUP_S) -> None:
+    """Run every variant until the GPU has been busy for `seconds`: compiles kernels and lifts the clock."""
+    end = time.perf_counter() + seconds
+    while True:
+        for f in fns:
+            _chain_once(mx, f, x0, r)
+        if time.perf_counter() > end:
+            return
+
+
 def _chain_timer(mx):
     import numpy as np
 
     def measure(f, x0, r) -> tuple[float, float]:
-        """(total us, python us) per call, over CALL_CHAIN dependent calls like one word of decode."""
-        def chain():
-            x, h = x0, None
-            for _ in range(CALL_CHAIN):  # each call feeds the next, like layers in a model
-                h, x = f(x, r)
-            return [h, x]
-        for _ in range(3):
-            mx.eval(chain())
-        py, tot = [], []
-        for _ in range(CALL_REPS):
-            t0 = time.perf_counter()
-            outs = chain()
-            t1 = time.perf_counter()
-            mx.eval(outs)
-            t2 = time.perf_counter()
-            py.append((t1 - t0) / CALL_CHAIN)
-            tot.append((t2 - t0) / CALL_CHAIN)
-        return float(np.median(tot)) * 1e6, float(np.median(py)) * 1e6
+        _warm(mx, [f], x0, r, seconds=0.1)
+        tot, py = zip(*[_chain_once(mx, f, x0, r) for _ in range(CALL_REPS)])
+        return float(np.median(tot)), float(np.median(py))
     return measure
 
 
@@ -267,6 +320,7 @@ def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_p
     mx, norm = _model_norm(name, on_progress)
     measure = _chain_timer(mx)
     stock = _stock(mx, norm)
+    warmed = False
     plain, comp = make_fused(mx, kernel, config, compiled=False), make_fused(mx, kernel, config)
     empty = mx.fast.metal_kernel(name="carmen_empty", input_names=["x"], output_names=["out"],
                                  source="if (thread_position_in_grid.x == 0) { out[0] = x[0]; }")
@@ -283,6 +337,9 @@ def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_p
     for rows in rows_list:
         x0, r = _inputs(mx, rows, norm)
         on_progress(f"timing {len(variants)} ways at {rows} x {x0.shape[-1]} {str(x0.dtype).split('.')[-1]}")
+        if not warmed:
+            _warm(mx, [stock], x0, r)
+            warmed = True
         for label, f in variants.items():
             try:
                 out.append(CallTiming(label, rows, *measure(f, x0, r)))
@@ -291,14 +348,20 @@ def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_p
     return out
 
 
+HOLDOUT_TURNS = 15
+
+
 @dataclass
 class Holdout:
     regime: str
     rows: int
-    stock_us: float
+    stock_us: float  # medians over the turns
     compiled_us: float
     carmen_us: float
     judge_vs_compiled: float  # what the judge measured for this regime's champion
+    ratio_lo: float | None = None  # middle half of the per-turn (compiled / carmen) ratios
+    ratio_hi: float | None = None
+    stock_spread: float = 1.0  # stock's own p75 / p25 across turns: how steady the ruler was
 
     @property
     def vs_compiled(self) -> float:
@@ -309,27 +372,48 @@ class Holdout:
         return self.stock_us / self.carmen_us
 
     @property
+    def verdict(self) -> str:
+        """unsteady: stock alone moved >15%, so nothing can be concluded. tie: in the model it's within
+        5% of compiled stock, or its range spans 1.0. holds: same side of 1.0 as the judge and within 25%.
+        Otherwise the judge was wrong."""
+        if self.stock_spread > 1.15:
+            return "unsteady"
+        m, j = self.vs_compiled, self.judge_vs_compiled
+        if abs(m - 1) <= 0.05 or (self.ratio_lo is not None and self.ratio_lo <= 1 <= self.ratio_hi):
+            return "tie"
+        return "holds" if (j >= 1) == (m >= 1) and abs(m / j - 1) <= 0.25 else "disagrees"
+
+    @property
     def agrees(self) -> bool:
-        """Same side of 1.0 and within 25%: the judge's number survived contact with the model."""
-        j, m = self.judge_vs_compiled, self.vs_compiled
-        return (j >= 1) == (m >= 1) and abs(m / j - 1) <= 0.25
+        return self.verdict == "holds"
 
 
 def holdout(name: str, champions: dict[str, tuple[Kernel, dict, int, float]], on_progress=print) -> list[Holdout]:
     """The frozen final check: each regime's champion called the way the model calls it (compiled,
     48 calls chained, real norm weights and dtype), vs stock and mx.compile(stock). Carmy never sees
-    this number, so it can't be optimized against; it only says whether the judge's score holds."""
+    this number, so it can't be optimized against; it only says whether the judge's score holds.
+    The GPU is warmed first and the three take turns, so clock changes hit all of them alike."""
+    import numpy as np
     mx, norm = _model_norm(name, on_progress)
-    measure = _chain_timer(mx)
     stock = _stock(mx, norm)
     stock_c = mx.compile(stock)
     out = []
     for regime, (kernel, config, rows, judged) in champions.items():
         x0, r = _inputs(mx, rows, norm)
         f = make_fused(mx, kernel, config)
-        on_progress(f"in-model check: {regime} champion at {rows} x {x0.shape[-1]}")
-        out.append(Holdout(regime, rows, measure(stock, x0, r)[0], measure(stock_c, x0, r)[0],
-                           measure(lambda x, r_: f(x, r_, norm), x0, r)[0], judged))
+        fns = {"stock": stock, "compiled": stock_c, "carmen": lambda x, r_, f=f: f(x, r_, norm)}
+        on_progress(f"in-model check: {regime} champion at {rows} x {x0.shape[-1]}, {HOLDOUT_TURNS} turns")
+        _warm(mx, list(fns.values()), x0, r)
+        t = {k: [] for k in fns}
+        names = list(fns)
+        for turn in range(HOLDOUT_TURNS):
+            for k in names[turn % 3:] + names[:turn % 3]:
+                t[k].append(_chain_once(mx, fns[k], x0, r)[0])
+        ratios = np.array(t["compiled"]) / np.array(t["carmen"])
+        p25, p75 = np.percentile(t["stock"], [25, 75])
+        out.append(Holdout(regime, rows, float(np.median(t["stock"])), float(np.median(t["compiled"])),
+                           float(np.median(t["carmen"])), judged, float(np.percentile(ratios, 25)),
+                           float(np.percentile(ratios, 75)), float(p75 / p25)))
     return out
 
 
@@ -342,29 +426,50 @@ def save_calls(name: str, timings: list[CallTiming], kernel_id: str | None, runs
     return path
 
 
-def apply_kernel(mx, model, fused) -> int:
-    """Swap the fused kernel into every layer. Each layer computes h = x + attn and its norm in one
-    kernel, then the layer's output and the next layer's input norm in another."""
+def apply_layers(mx, model, fused=None, compile_tail: bool = False) -> int:
+    """Rewrite what each layer does after attention. With `fused`, the residual add + norm become
+    carmen's kernel (h = x + attn and its norm in one call, then the layer's output and the next
+    layer's input norm in another). With `compile_tail`, that whole tail (adds, norms, MLP) is built
+    once by mx.compile. Attention itself is untouched."""
     layers = list(_layers(model))
     for i, layer in enumerate(layers):
-        object.__setattr__(layer, "_carmen_next", layers[i + 1] if i + 1 < len(layers) else None)
+        nxt = layers[i + 1] if i + 1 < len(layers) else None
+        if fused is None:
+            def tail(x, r, _l=layer):
+                h = x + r
+                return [h + _l.mlp(_l.post_attention_layernorm(h))]
+        else:
+            def tail(x, r, _l=layer, _n=nxt):
+                h, n2 = fused(x, r, _l.post_attention_layernorm)
+                r2 = _l.mlp(n2)
+                return [h + r2] if _n is None else list(fused(h, r2, _n.input_layernorm))
+        object.__setattr__(layer, "_carmen_tail", mx.compile(tail) if compile_tail else tail)
+        object.__setattr__(layer, "_carmen_next", nxt if fused is not None else None)
         object.__setattr__(layer, "_carmen_pre", None)
 
         def call(self, x, mask=None, cache=None):
             pre = self._carmen_pre
             normed = pre[1] if pre is not None and pre[0] is x else self.input_layernorm(x)
             object.__setattr__(self, "_carmen_pre", None)
-            r = self.self_attn(normed, mask, cache)
-            h, n2 = fused(x, r, self.post_attention_layernorm)
-            r = self.mlp(n2)
-            nxt = self._carmen_next
-            if nxt is None:
-                return h + r
-            out, n_next = fused(h, r, nxt.input_layernorm)
-            object.__setattr__(nxt, "_carmen_pre", (out, n_next))
-            return out
-        _subclass(layer, "Fused", call)
+            out = self._carmen_tail(x, self.self_attn(normed, mask, cache))
+            if len(out) == 2:
+                object.__setattr__(self._carmen_next, "_carmen_pre", (out[0], out[1]))
+            return out[0]
+        _subclass(layer, "Tail", call)
     return len(layers)
+
+
+def apply_kernel(mx, model, fused) -> int:
+    return apply_layers(mx, model, fused)
+
+
+def weight_bytes(model) -> int:
+    """Bytes one decoded word must read: every weight once. An untied input embedding is a lookup
+    of one row, not a full read, so it doesn't count; a tied one is read in full as the output head."""
+    from mlx.utils import tree_flatten
+    params = tree_flatten(model.parameters())
+    untied = getattr(model, "lm_head", None) is not None
+    return sum(v.nbytes for k, v in params if not (untied and "embed_tokens" in k))
 
 
 def _generate(mx, model, make_prompt_cache, prompt, gen_tokens: int):
@@ -385,48 +490,73 @@ def _generate(mx, model, make_prompt_cache, prompt, gen_tokens: int):
 
 
 def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | None = None,
-        prompt_tokens: int = 512, gen_tokens: int = 128, repeats: int = 3, on_progress=print,
+        prompt_tokens: int = 512, gen_tokens: int = 128, repeats: int = 5, on_progress=print,
         champions: dict[str, tuple[Kernel, dict]] | None = None) -> list[Result]:
-    """`champions` ({regime: (kernel, config)}) runs each regime's own champion; else `kernel` everywhere."""
+    """`champions` ({regime: (kernel, config)}) runs each regime's own champion; else `kernel` everywhere.
+    All modes are loaded at once and take `repeats` turns each, in rotating order."""
+    import numpy as np
     mx, nn, load, make_prompt_cache = _imports()
-    results, stock_ids, stock_logits = [], None, None
+    modes = list(modes)
+    for m in modes:
+        parts(m)  # fail on a typo before loading anything
+    if any("kernel" in parts(m) for m in modes) and kernel is None and not champions:
+        raise SystemExit("no residual_rmsnorm kernel: run `carmen run residual_rmsnorm` or pass --kernel golden")
+    loaded, prompt, wbytes = {}, None, None
     for mode in modes:
         on_progress(f"{mode}: loading {name}")
         model, tokenizer = load(name)
-        ids = tokenizer.encode(PROMPT_TEXT * (prompt_tokens // 20 + 1))[:prompt_tokens]
-        prompt = mx.array(ids)[None]
-        if mode in ("plumbing", "both"):
-            on_progress(f"{mode}: merged gate+up in {apply_plumbing(mx, nn, model)} layers")
-        if mode in ("kernel", "both"):
-            if kernel is None and not champions:
-                raise SystemExit("no residual_rmsnorm kernel: run `carmen run residual_rmsnorm` or pass --kernel golden")
-            fused = make_regime_fused(mx, champions) if champions else make_fused(mx, kernel, config)
-            on_progress(f"{mode}: carmen kernel in {apply_kernel(mx, model, fused)} layers")
-        _generate(mx, model, make_prompt_cache, prompt, 8)  # warm up: compile kernels, fill caches
-        best = None
-        for _ in range(repeats):
-            p, d, out_ids, logits = _generate(mx, model, make_prompt_cache, prompt, gen_tokens)
-            if best is None or d < best[1]:
-                best = (p, d, out_ids, logits)
-        p, d, out_ids, logits = best
-        r = Result(mode, prompt_tokens / p, (gen_tokens - 1) / d, tokens_total=gen_tokens)
+        if prompt is None:
+            ids = tokenizer.encode(PROMPT_TEXT * (prompt_tokens // 20 + 1))[:prompt_tokens]
+            prompt = mx.array(ids)[None]
         if mode == "stock":
-            stock_ids, stock_logits = out_ids, logits
-        elif stock_ids is not None:
-            r.tokens_match = next((i for i, (a, b) in enumerate(zip(out_ids, stock_ids)) if a != b), len(out_ids))
-            r.max_logit_diff = float(mx.abs(logits - stock_logits).max().item())
-            r.same_first_token = out_ids[0] == stock_ids[0]
+            wbytes = weight_bytes(model)
+        p = parts(mode)
+        if "plumbing" in p:
+            on_progress(f"{mode}: merged gate+up in {apply_plumbing(mx, nn, model)} layers")
+        if "kernel" in p or "compile" in p:
+            fused = None
+            if "kernel" in p:
+                fused = make_regime_fused(mx, champions) if champions else make_fused(mx, kernel, config)
+            n = apply_layers(mx, model, fused, compile_tail="compile" in p)
+            on_progress(f"{mode}: " + " + ".join(x for x in (("carmen kernel" if fused else ""),
+                                                             ("compiled layer tails" if "compile" in p else "")) if x)
+                        + f" in {n} layers")
+        _generate(mx, model, make_prompt_cache, prompt, 8)  # warm up: compile kernels, fill caches
+        loaded[mode] = model
+
+    on_progress(f"taking turns: {repeats} x {len(modes)} runs of {prompt_tokens} prompt + {gen_tokens} new tokens")
+    samples = {m: [] for m in modes}
+    for turn in range(repeats):
+        for mode in modes[turn % len(modes):] + modes[:turn % len(modes)]:
+            samples[mode].append(_generate(mx, loaded[mode], make_prompt_cache, prompt, gen_tokens))
+
+    results, stock = [], None
+    for mode in modes:
+        pre = [prompt_tokens / s[0] for s in samples[mode]]
+        dec = [(gen_tokens - 1) / s[1] for s in samples[mode]]
+        r = Result(mode, float(np.median(pre)), float(np.median(dec)), tokens_total=gen_tokens,
+                   decode_lo=min(dec), decode_hi=max(dec), prefill_lo=min(pre), prefill_hi=max(pre),
+                   turns=repeats, weight_bytes=wbytes if mode == "stock" else None)
+        out_ids, logits = samples[mode][0][2], samples[mode][0][3]
+        if mode == "stock":
+            stock = (out_ids, logits)
+        elif stock is not None:
+            r.tokens_match = next((i for i, (a, b) in enumerate(zip(out_ids, stock[0])) if a != b), len(out_ids))
+            r.max_logit_diff = float(mx.abs(logits - stock[1]).max().item())
+            r.same_first_token = out_ids[0] == stock[0][0]
         results.append(r)
-        on_progress(f"{mode}: prefill {r.prefill_tps:,.0f} tok/s, decode {r.decode_tps:,.1f} tok/s")
-        del model
-        if hasattr(mx, "clear_cache"):
-            mx.clear_cache()
+        on_progress(f"{mode}: prefill {r.prefill_tps:,.0f} tok/s, decode {r.decode_tps:,.1f} tok/s "
+                    f"({r.decode_lo:,.1f}-{r.decode_hi:,.1f})")
+    del loaded
+    if hasattr(mx, "clear_cache"):
+        mx.clear_cache()
     return results
 
 
-def save(name: str, results: list[Result], kernel_id: str | None, runs_dir: Path) -> Path:
+def save(name: str, results: list[Result], kernel_id: str | None, runs_dir: Path, extra: dict | None = None) -> Path:
     runs_dir = Path(runs_dir)
     runs_dir.mkdir(parents=True, exist_ok=True)
     path = runs_dir / f"e2e-{name.split('/')[-1]}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-    path.write_text(json.dumps({"model": name, "kernel": kernel_id, "results": [asdict(r) for r in results]}, indent=2))
+    path.write_text(json.dumps({"model": name, "kernel": kernel_id, "results": [asdict(r) for r in results],
+                                **(extra or {})}, indent=2))
     return path

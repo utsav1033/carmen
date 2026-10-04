@@ -46,3 +46,43 @@ def test_calls_command_prints_where_the_time_goes(tmp_path, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "0.25×" in out and "ValueError: nope" in out and "+1.44 ms per word" in out
     assert next(tmp_path.glob("calls-*.json"))
+
+
+def test_modes_combine_and_typos_fail_early():
+    assert e2e.parts("stock") == set() and e2e.parts("all") == {"plumbing", "compile", "kernel"}
+    assert e2e.parts("plumbing+compile") == {"plumbing", "compile"} and e2e.parts("both") == {"plumbing", "kernel"}
+    import pytest
+    with pytest.raises(SystemExit, match="compiel"):
+        e2e.parts("plumbing+compiel")
+
+
+def test_beyond_noise_needs_ranges_that_dont_overlap():
+    R = e2e.Result
+    stock = R("stock", 2000, 150, decode_lo=145, decode_hi=155)
+    assert e2e.beyond_noise(R("a", 2000, 165, decode_lo=158, decode_hi=170), stock) == "faster"
+    assert e2e.beyond_noise(R("b", 2000, 160, decode_lo=150, decode_hi=168), stock) == "within noise"
+    assert e2e.beyond_noise(R("c", 2000, 130, decode_lo=125, decode_hi=140), stock) == "slower"
+    assert round(e2e.speed_limit_tps(300_000_000, 120)) == 400
+
+
+def test_e2e_prints_noise_and_the_speed_limit(tmp_path, monkeypatch, capsys):
+    from carmen import judge
+    R = e2e.Result
+    fake = [R("stock", 2000, 150.0, tokens_total=128, decode_lo=145, decode_hi=155, turns=5, weight_bytes=300_000_000),
+            R("compile", 2100, 170.0, 128, 128, 0.0, True, decode_lo=160, decode_hi=175, turns=5)]
+    monkeypatch.setattr(e2e, "run", lambda *a, **k: fake)
+    monkeypatch.setattr(judge, "peak_gbps", lambda backend: {"chip": "M4", "peak_gbps": 120.0})
+    assert cli.main(["e2e", "--modes", "stock,compile", "--runs", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "faster" in out and "~400 tok/s" in out and "stock reaches 38%" in out and "compile 42%" in out
+    saved = json.loads(next(tmp_path.glob("e2e-*.json")).read_text())
+    assert saved["decode_speed_limit_tps"] == 400.0
+
+
+def test_holdout_says_tie_or_unsteady_instead_of_guessing():
+    H = e2e.Holdout
+    assert H("decode", 1, 13.9, 17.1, 17.6, 1.02).verdict == "tie"  # 0.97x: within 5%
+    assert H("decode", 1, 13.9, 17.1, 18.1, 1.02).verdict == "disagrees"  # 0.94x with no range to say otherwise
+    assert H("decode", 1, 13.9, 17.1, 18.1, 1.02, ratio_lo=0.9, ratio_hi=1.03).verdict == "tie"
+    assert H("prefill", 512, 25.7, 33.6, 59.7, 1.52, 0.5, 0.6, stock_spread=1.4).verdict == "unsteady"
+    assert H("prefill", 512, 25.7, 33.6, 59.7, 1.52, 0.5, 0.6).verdict == "disagrees"

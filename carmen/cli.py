@@ -178,6 +178,10 @@ def cmd_run(args) -> int:
     return 0
 
 
+_VERDICT = {"holds": ui.s(f"{ui.OK} holds", "green"), "tie": ui.s("tie (same speed in the model)", "grey"),
+            "disagrees": ui.s("judge was wrong", "yellow"), "unsteady": ui.s("measurement unsteady", "yellow")}
+
+
 def _holdout(args, summary: dict) -> None:
     """The frozen final check, inside the real model. Carmy never saw it."""
     from . import e2e
@@ -194,14 +198,17 @@ def _holdout(args, summary: dict) -> None:
     results = e2e.holdout(summary["target"]["model"], champs, on_progress=lambda m: print(ui.s("  " + m, "grey")))
     rows = [[h.regime, summary["regime_champions"][h.regime]["attempt"], ui.speed(h.judge_vs_compiled),
              ui.speed(h.vs_compiled), ui.speed(h.vs_stock), f"{h.carmen_us:.1f} / {h.compiled_us:.1f} us",
-             ui.s(f"{ui.OK} holds", "green") if h.agrees else ui.s("judge was wrong", "yellow")] for h in results]
+             _VERDICT[h.verdict]] for h in results]
     ui.table(["regime", "champion", "judge vs compile", "in model vs compile", "in model vs stock",
               "carmen / compiled", ""], rows, align="llrrrrl")
-    summary["holdout"] = [{**h.__dict__, "vs_compiled": h.vs_compiled, "vs_stock": h.vs_stock, "agrees": h.agrees}
+    summary["holdout"] = [{**h.__dict__, "vs_compiled": h.vs_compiled, "vs_stock": h.vs_stock, "agrees": h.agrees,
+                           "verdict": h.verdict}
                           for h in results]
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
     print(ui.s("in model = called the way `carmen e2e` calls it (compiled, 48 calls chained, the model's norm "
-               "weights). Agrees = same side of 1.0 and within 25% of the judge.", "grey"))
+               "weights), GPU warmed first, stock/compiled/carmen taking turns. holds = same side of 1.0 as the "
+               "judge and within 25%. tie = within 5% of compiled stock in the model. unsteady = stock alone moved "
+               "more than 15% between turns, so no verdict.", "grey"))
 
 
 def _print_summary(sm: dict) -> None:
@@ -295,7 +302,7 @@ def cmd_e2e(args) -> int:
     ui.banner(f"e2e · {args.model}")
     kernel = config = kernel_id = champions = None
     modes = [m.strip() for m in args.modes.split(",")]
-    if args.calls or any(m in ("kernel", "both") for m in modes):
+    if args.calls or any("kernel" in e2e.parts(m) for m in modes):
         if args.kernel == "golden":
             kernel = broken.golden(e2e.OP)
             config, kernel_id = kernel.configs[0], "golden reference kernel"
@@ -324,22 +331,40 @@ def cmd_e2e(args) -> int:
     results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
                       on_progress=lambda m: print(ui.s("  " + m, "grey")), champions=champions)
     stock = results[0]
-    ui.rule("result")
+    ui.rule(f"result · median of {stock.turns} turns each, range in brackets")
     rows = []
     for r in results:
+        dec = f"{r.decode_tps:,.1f}" + (ui.s(f" ({r.decode_lo:,.0f}-{r.decode_hi:,.0f})", "grey")
+                                         if r.decode_lo is not None else "")
         if r.mode == "stock":
-            rows.append([r.mode, f"{r.prefill_tps:,.0f}", f"{r.decode_tps:,.1f}", "", "reference"])
+            rows.append([r.mode, f"{r.prefill_tps:,.0f}", "", dec, "", "", "reference"])
             continue
         same = r.tokens_match == r.tokens_total
         answers = (ui.s(f"{ui.OK} same {r.tokens_total} tokens", "green") if same else
                    ui.s(f"diverge at token {r.tokens_match + 1}", "yellow"))
-        rows.append([r.mode, f"{r.prefill_tps:,.0f}", f"{r.decode_tps:,.1f}",
-                     ui.speed(r.decode_tps / stock.decode_tps),
+        noise = e2e.beyond_noise(r, stock)
+        noise = ui.s(noise, {"faster": "green", "slower": "red"}.get(noise, "grey"))
+        rows.append([r.mode, f"{r.prefill_tps:,.0f}", ui.speed(r.prefill_tps / stock.prefill_tps), dec,
+                     ui.speed(r.decode_tps / stock.decode_tps), noise,
                      answers + ui.s(f"  (first logits within {r.max_logit_diff:.3g})", "grey")])
-    ui.table(["mode", "prefill tok/s", "decode tok/s", "decode vs stock", "outputs vs stock"], rows, align="lrrrl")
-    print(ui.s("\nfp16/bf16 rounding can flip a near-tie between two words, so a late divergence with a tiny "
-               "logit difference is rounding, not a bug; an early one with a large difference is a bug.", "grey"))
-    print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs))}", "grey"))
+    ui.table(["mode", "prefill tok/s", "vs stock", "decode tok/s", "vs stock", "beyond noise?", "outputs vs stock"],
+             rows, align="lrrrrll")
+    extra = {}
+    if stock.weight_bytes:
+        peak = judge.peak_gbps("metal")["peak_gbps"]
+        limit = e2e.speed_limit_tps(stock.weight_bytes, peak)
+        best = max(results, key=lambda r: r.decode_tps)
+        extra = {"peak_gbps": peak, "decode_speed_limit_tps": limit}
+        print(f"\ndecode speed limit: {ui.s(f'~{limit:,.0f} tok/s', 'bold')}  "
+              + ui.s(f"(every word reads {stock.weight_bytes / 1e9:.2f} GB of weights; this Mac moves {peak:.0f} GB/s)",
+                     "grey"))
+        print(f"stock reaches {stock.decode_tps / limit:.0%} of it"
+              + (f", {best.mode} {best.decode_tps / limit:.0%}" if best is not stock else "")
+              + ui.s(". The rest is launches, Python, and ops too small to keep the GPU busy.", "grey"))
+    print(ui.s("\nbeyond noise = this mode's slowest turn beats stock's fastest (or the reverse). fp16 rounding can "
+               "flip a near-tie between two words, so a late divergence with a tiny logit difference is rounding, "
+               "not a bug; an early one with a large difference is a bug.", "grey"))
+    print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs), extra)}", "grey"))
     return 0
 
 
@@ -491,11 +516,12 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("e2e", help="run a real model stock vs with carmen's changes: tok/s and same answers?")
     p.add_argument("model", nargs="?", default="mlx-community/Qwen2.5-0.5B-Instruct-4bit")
-    p.add_argument("--modes", default="stock,plumbing,kernel,both")
+    p.add_argument("--modes", default="stock,plumbing,compile,kernel,all",
+                   help="comma-separated: stock, plumbing, compile, kernel, all, or parts joined with + (plumbing+compile)")
     p.add_argument("--kernel", default="latest", help="latest = champions of your newest `run residual_rmsnorm --for` run (one per regime), else of your newest residual_rmsnorm run; or golden")
     p.add_argument("--prompt", type=int, default=512)
     p.add_argument("--gen", type=int, default=128)
-    p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--repeats", type=int, default=5, help="turns per mode (modes take turns)")
     p.add_argument("--runs", default="runs")
     p.add_argument("--calls", action="store_true", help="time one kernel call several ways instead (where the time goes)")
     p.set_defaults(fn=cmd_e2e)
