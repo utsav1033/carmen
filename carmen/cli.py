@@ -251,7 +251,7 @@ def cmd_e2e(args) -> int:
     ui.banner(f"e2e · {args.model}")
     kernel = config = kernel_id = None
     modes = [m.strip() for m in args.modes.split(",")]
-    if any(m in ("kernel", "both") for m in modes):
+    if args.calls or any(m in ("kernel", "both") for m in modes):
         if args.kernel == "golden":
             kernel = broken.golden(e2e.OP)
             config, kernel_id = kernel.configs[0], "golden reference kernel"
@@ -265,6 +265,8 @@ def cmd_e2e(args) -> int:
             for r in verdict.get("timing", []):
                 print(ui.s(f"  on its own at {'x'.join(map(str, r['shape']))} {r['dtype']}: "
                            f"{r['speedup']:.2f}x vs MLX", "grey"))
+    if args.calls:
+        return _print_calls(e2e, args, kernel, config, kernel_id)
     if "stock" not in modes:
         modes = ["stock"] + modes  # every comparison is against stock
     results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
@@ -286,6 +288,30 @@ def cmd_e2e(args) -> int:
     print(ui.s("\nfp16/bf16 rounding can flip a near-tie between two words, so a late divergence with a tiny "
                "logit difference is rounding, not a bug; an early one with a large difference is a bug.", "grey"))
     print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs))}", "grey"))
+    return 0
+
+
+def _print_calls(e2e, args, kernel, config, kernel_id) -> int:
+    timings = e2e.call_bench(args.model, kernel, config, on_progress=lambda m: print(ui.s("  " + m, "grey")))
+    for rows in sorted({t.rows for t in timings}):
+        group = [t for t in timings if t.rows == rows]
+        stock = next(t for t in group if t.variant.startswith("stock: "))
+        ui.rule(f"one residual add + rmsnorm, {rows} row{'s' if rows > 1 else ''}, us per call")
+        tbl = []
+        for t in group:
+            if t.error:
+                tbl.append([t.variant, "", "", "", ui.s(t.error, "yellow")])
+                continue
+            tbl.append([t.variant, f"{t.total_us:.1f}", f"{t.python_us:.1f}",
+                        ui.speed(stock.total_us / t.total_us) if t is not stock else "reference", ""])
+        ui.table(["how", "total", "python", "vs stock", ""], tbl, align="lrrrl")
+    one = {t.variant: t for t in timings if t.rows == 1}
+    s, c = one["stock: x + r, then rms_norm"], one["carmen, as e2e calls it"]
+    extra = (c.total_us - s.total_us) * e2e.CALL_CHAIN / 1e3
+    print(ui.s(f"\ntotal = Python + GPU per call, {e2e.CALL_CHAIN} calls in a row like one word of decode. "
+               f"python = just building the call. At 1 row, carmen as e2e calls it costs {extra:+.2f} ms per word "
+               f"vs stock ({e2e.CALL_CHAIN} calls).", "grey"))
+    print(ui.s(f"saved {e2e.save_calls(args.model, timings, kernel_id, Path(args.runs))}", "grey"))
     return 0
 
 
@@ -415,6 +441,7 @@ def main(argv=None) -> int:
     p.add_argument("--gen", type=int, default=128)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--runs", default="runs")
+    p.add_argument("--calls", action="store_true", help="time one kernel call several ways instead (where the time goes)")
     p.set_defaults(fn=cmd_e2e)
 
     p = sub.add_parser("report", help="summarize a run")

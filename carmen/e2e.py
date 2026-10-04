@@ -147,6 +147,114 @@ def make_fused(mx, kernel: Kernel, config: dict):
     return fused
 
 
+def make_fused_prebuilt(mx, kernel: Kernel, config: dict):
+    """Same kernel, but everything that only depends on the shape (template, grid, eps array,
+    output shape) is built once per shape, so a call does the least Python possible."""
+    from . import ops
+    op = ops.get(OP)
+    k = mx.fast.metal_kernel(name=f"carmen_{OP}_{kernel.digest()}", input_names=list(op.input_names),
+                             output_names=["out"], source=kernel.source, header=kernel.header)
+    plans: dict = {}
+
+    def fused(x, res, norm):
+        key = (x.shape, x.dtype, id(norm))
+        p = plans.get(key)
+        if p is None:
+            n = x.shape[-1]
+            rows = x.size // n
+            grid, tg = op.grid(rows, n, config)
+            eps = mx.array([float(getattr(norm, "eps", 1e-5))], dtype=mx.float32)
+            p = plans[key] = (rows, n, x.shape, eps, [("T", x.dtype)] + list(config.items()), grid, tg,
+                              [(2, rows, n)], [x.dtype])
+        rows, n, shape, eps, template, grid, tg, out_shapes, out_dtypes = p
+        (out,) = k(inputs=[x.reshape(rows, n), res.reshape(rows, n), norm.weight, eps], template=template,
+                   grid=grid, threadgroup=tg, output_shapes=out_shapes, output_dtypes=out_dtypes)
+        return out[0].reshape(shape), out[1].reshape(shape)
+    return fused
+
+
+# ── where does the time of one call go? ───────────────────────────────────────────────
+CALL_CHAIN = 48  # residual+norm calls per word in Qwen 0.5B (24 layers x 2)
+CALL_REPS = 30
+
+
+@dataclass
+class CallTiming:
+    variant: str
+    rows: int
+    total_us: float  # per call, inside a chain of CALL_CHAIN dependent calls, Python + GPU
+    python_us: float  # per call, just building the graph in Python (no GPU)
+    error: str | None = None
+
+
+def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_progress=print) -> list[CallTiming]:
+    """Time one residual-add + rmsnorm call several ways at the model's real shape, to see whether
+    the GPU work or the cost of calling the kernel decides the speed inside a model."""
+    import numpy as np
+    mx, nn, load, _ = _imports()
+    on_progress(f"loading {name} for its norm weights")
+    model, _ = load(name)
+    norm = _layers(model)[0].post_attention_layernorm
+    n, dt = norm.weight.shape[0], norm.weight.dtype
+    eps = float(getattr(norm, "eps", 1e-5))
+    slow, fast = make_fused(mx, kernel, config), make_fused_prebuilt(mx, kernel, config)
+
+    def stock(x, r):
+        h = x + r
+        return h, mx.fast.rms_norm(h, norm.weight, eps)
+
+    empty = mx.fast.metal_kernel(name="carmen_empty", input_names=["x"], output_names=["out"],
+                                 source="if (thread_position_in_grid.x == 0) { out[0] = x[0]; }")
+    variants = {
+        "MLX: x + 1 (smallest op there is)": lambda x, r: (x + 1, x),
+        "MLX: empty custom kernel": lambda x, r: (empty(inputs=[x], grid=(1, 1, 1), threadgroup=(1, 1, 1),
+                                                        output_shapes=[x.shape], output_dtypes=[x.dtype])[0], x),
+        "stock: x + r, then rms_norm": stock,
+        "stock, mx.compile": mx.compile(stock),
+        "carmen, as e2e calls it": lambda x, r: slow(x, r, norm),
+        "carmen, prebuilt args": lambda x, r: fast(x, r, norm),
+        "carmen, prebuilt + mx.compile": mx.compile(lambda x, r: fast(x, r, norm)),
+    }
+    out = []
+    for rows in rows_list:
+        x0 = mx.random.normal((1, rows, n)).astype(dt)
+        r = (mx.random.normal((1, rows, n)) * 0.1).astype(dt)
+        mx.eval(x0, r)
+        on_progress(f"timing {len(variants)} ways at {rows} x {n} {str(dt).split('.')[-1]}")
+        for label, f in variants.items():
+            def chain():
+                x, h = x0, None
+                for _ in range(CALL_CHAIN):  # each call feeds the next, like layers in a model
+                    h, x = f(x, r)
+                return [h, x]
+            try:
+                for _ in range(3):
+                    mx.eval(chain())
+                py, tot = [], []
+                for _ in range(CALL_REPS):
+                    t0 = time.perf_counter()
+                    outs = chain()
+                    t1 = time.perf_counter()
+                    mx.eval(outs)
+                    t2 = time.perf_counter()
+                    py.append((t1 - t0) / CALL_CHAIN)
+                    tot.append((t2 - t0) / CALL_CHAIN)
+                out.append(CallTiming(label, rows, float(np.median(tot)) * 1e6, float(np.median(py)) * 1e6))
+            except Exception as e:  # report it, don't hide it: a variant that can't run is a finding
+                out.append(CallTiming(label, rows, float("nan"), float("nan"), f"{type(e).__name__}: {e}"[:160]))
+    del model
+    return out
+
+
+def save_calls(name: str, timings: list[CallTiming], kernel_id: str | None, runs_dir: Path) -> Path:
+    runs_dir = Path(runs_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    path = runs_dir / f"calls-{name.split('/')[-1]}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    path.write_text(json.dumps({"model": name, "kernel": kernel_id, "chain": CALL_CHAIN,
+                                "timings": [asdict(t) for t in timings]}, indent=2))
+    return path
+
+
 def apply_kernel(mx, model, fused) -> int:
     """Swap the fused kernel into every layer. Each layer computes h = x + attn and its norm in one
     kernel, then the layer's output and the next layer's input norm in another."""
