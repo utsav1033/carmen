@@ -46,7 +46,8 @@ class MetalAdapter:
     def upload(self, inputs, dtype: str = "float32"):
         def put(k, v):
             a = mx.array(v)
-            return a.astype(mx.bfloat16) if dtype == "bfloat16" and k not in SCALAR_INPUTS else a
+            cast = dtype == "bfloat16" and k not in SCALAR_INPUTS and np.asarray(v).dtype.kind == "f"
+            return a.astype(mx.bfloat16) if cast else a  # integer inputs (packed weights) stay as they are
         return {k: put(k, v) for k, v in inputs.items()}
 
     def _call(self, built, op, config, dev_inputs, rows, n, dtype, poison: bool = True):

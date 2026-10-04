@@ -58,6 +58,8 @@ def _shrink(adapter, op, built, cfg, case: Case) -> str | None:
         if rows * n >= case.rows * case.n:
             break
         small = case.with_shape(rows, n)
+        if op.keep_inner_on_shrink:
+            small = Case(small.kind, rows, n, small.dtype, small.seed, small.family, case.inner)
         try:
             p = Prepared(op, adapter, small)
             if p.valid and not _run_case(adapter, op, built, cfg, p)[1].ok:

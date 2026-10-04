@@ -121,6 +121,10 @@ class OpSpec:
     # Outputs of shape (rows, n) each, stacked in one buffer: out = [first; second; ...].
     # The reference returns them stacked too, shape (outputs * rows, n).
     outputs: int = 1
+    # Inputs holding integers (packed 4-bit weights as uint32): never converted to the element type.
+    int_inputs: tuple[str, ...] = ()
+    # Shrinking a failing case keeps its inner length (quantized ops need K to stay a multiple of 64).
+    keep_inner_on_shrink: bool = False
 
     def grid(self, rows: int, n: int, config: dict) -> tuple[tuple, tuple]:
         if self.launch:
@@ -141,7 +145,7 @@ class OpSpec:
         if case.dtype != "bfloat16":
             return gen(rng, case.rows, case.n, case.dtype, **extra)
         d = gen(rng, case.rows, case.n, "float32", **extra)
-        return {k: v if k in SCALAR_INPUTS else to_bf16(v) for k, v in d.items()}
+        return {k: v if k in SCALAR_INPUTS or k in self.int_inputs else to_bf16(v) for k, v in d.items()}
 
     def bytes_moved(self, rows: int, n: int, dtype: str, inner: int = 0) -> int:
         """Minimum memory traffic: read every input once, write the output once."""

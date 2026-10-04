@@ -9,8 +9,11 @@ Runs one model several ways and compares each against stock MLX:
             (its KV cache grows every word, which mx.compile can't follow)
   kernel    carmen's residual_rmsnorm swapped into every layer: the residual add and the norm
             after it become one kernel, twice per layer, so 4 small kernels per layer become 2
+  mlp       carmen's mlp_up + mlp_down at decode: everything after attention (add, norm, the 4-bit
+            gate/up/down matmuls, silu, multiply, add) as 2 kernels instead of 8. Prefill stays stock.
   all       plumbing + compile + kernel
-Modes combine with +, e.g. plumbing+compile.
+Modes combine with +, e.g. plumbing+compile or mlp+compile. mlp and kernel both rewrite the same
+part of each layer, so they don't combine.
 
 Every version is loaded up front and they take turns (stock, plumbing, ..., then again), so a
 Mac that heats up or slows down mid-run hits every mode alike. Each mode reports its median and
@@ -31,7 +34,7 @@ from .backends import Kernel
 from .profile import PROMPT_TEXT
 
 MODES = ("stock", "plumbing", "compile", "kernel", "all")
-PARTS = ("plumbing", "compile", "kernel")
+PARTS = ("plumbing", "compile", "kernel", "mlp")
 OP = "residual_rmsnorm"
 
 
@@ -40,13 +43,15 @@ def parts(mode: str) -> set[str]:
     if mode == "stock":
         return set()
     if mode == "all":
-        return set(PARTS)
+        return {"plumbing", "compile", "kernel"}
     if mode == "both":
         return {"plumbing", "kernel"}
     got = set(mode.split("+"))
     bad = got - set(PARTS)
     if bad:
         raise SystemExit(f"unknown e2e mode part(s) {sorted(bad)}: use stock, all, or {'+'.join(PARTS)} combined with +")
+    if {"mlp", "kernel"} <= got:
+        raise SystemExit("mlp and kernel both rewrite what runs after attention; pick one per mode")
     return got
 
 
@@ -208,6 +213,69 @@ def make_fused(mx, kernel: Kernel, config: dict, compiled: bool = True):
             f = per_eps[eps] = mx.compile(lambda x_, r_, w_: raw(x_, r_, w_, eps))
         return f(x, res, norm.weight)
     return fused
+
+
+MLP_OPS = ("mlp_up", "mlp_down")
+
+
+def check_quantized(model) -> None:
+    """mlp_up / mlp_down read MLX's 4-bit, group-64 weights directly; refuse anything else."""
+    layer = _layers(model)[0]
+    m, norm = layer.mlp, layer.post_attention_layernorm
+    for name in ("gate_proj", "up_proj", "down_proj"):
+        p = getattr(m, name, None)
+        if p is None or getattr(p, "bits", None) != 4 or getattr(p, "group_size", None) != 64 or "bias" in p:
+            raise SystemExit(f"mode mlp needs 4-bit, group-64 quantized gate/up/down projections without bias; "
+                             f"this model's {name} is {type(p).__name__ if p is not None else 'missing'}"
+                             f" (bits={getattr(p, 'bits', None)}, group_size={getattr(p, 'group_size', None)})")
+        if p.scales.dtype != norm.weight.dtype:
+            raise SystemExit(f"mode mlp needs scales in the activation dtype ({norm.weight.dtype}); {name} has "
+                             f"{p.scales.dtype}")
+
+
+def make_mlp(mx, kernels: dict[str, tuple[Kernel, dict]]):
+    """block(x, attn, layer) -> layer output: x + attn + down(silu(gate(n)) * up(n)), n = norm(x + attn),
+    as 2 kernels (carmen's mlp_up and mlp_down) reading the model's 4-bit weights as they are."""
+    from . import ops
+    built = {}
+    for name in MLP_OPS:
+        k, cfg = kernels[name]
+        built[name] = (mx.fast.metal_kernel(name=f"carmen_{name}_{k.digest()}", input_names=list(ops.get(name).input_names),
+                                            output_names=["out"], source=k.source, header=k.header), cfg, ops.get(name))
+    eps_arrays: dict[float, object] = {}
+
+    def call(name, inputs, rows, n, dtype):
+        kern, cfg, op = built[name]
+        grid, tg = op.grid(rows, n, cfg)
+        (o,) = kern(inputs=inputs, template=[("T", dtype)] + list(cfg.items()), grid=grid, threadgroup=tg,
+                    output_shapes=[(rows, n)], output_dtypes=[dtype])
+        return o
+
+    def block(x, attn, layer):
+        m, norm = layer.mlp, layer.post_attention_layernorm
+        g, u, d = m.gate_proj, m.up_proj, m.down_proj
+        hidden = x.shape[-1]
+        rows = x.size // hidden
+        eps = float(getattr(norm, "eps", 1e-5))
+        if eps not in eps_arrays:
+            eps_arrays[eps] = mx.array([eps], dtype=mx.float32)
+        x2, r2 = x.reshape(rows, hidden), attn.reshape(rows, hidden)
+        a = call("mlp_up", [x2, r2, norm.weight, eps_arrays[eps], g.weight, g.scales, g.biases,
+                            u.weight, u.scales, u.biases], rows, g.weight.shape[0], x.dtype)
+        out = call("mlp_down", [a, x2, r2, d.weight, d.scales, d.biases], rows, hidden, x.dtype)
+        return out.reshape(x.shape)
+    return block
+
+
+def latest_kernel(runs_dir: Path, op: str) -> tuple[Kernel, dict, str] | None:
+    """Best kernel for `op` from your runs: the decode champion of the newest targeted run,
+    else the champion of the newest run."""
+    rc = latest_regime_champions(runs_dir, op)
+    if rc and "decode" in rc[0]:
+        k, cfg = rc[0]["decode"]
+        return k, cfg, f"{rc[1]}:{rc[2]['regime_champions']['decode']['attempt']} (decode champion)"
+    found = latest_champion(runs_dir, op)
+    return (found[0], found[1], found[2]) if found else None
 
 
 def make_regime_fused(mx, champions: dict[str, tuple[Kernel, dict]]):
@@ -426,7 +494,7 @@ def save_calls(name: str, timings: list[CallTiming], kernel_id: str | None, runs
     return path
 
 
-def apply_layers(mx, model, fused=None, compile_tail: bool = False) -> int:
+def apply_layers(mx, model, fused=None, compile_tail: bool = False, mlp_block=None) -> int:
     """Rewrite what each layer does after attention. With `fused`, the residual add + norm become
     carmen's kernel (h = x + attn and its norm in one call, then the layer's output and the next
     layer's input norm in another). With `compile_tail`, that whole tail (adds, norms, MLP) is built
@@ -434,7 +502,13 @@ def apply_layers(mx, model, fused=None, compile_tail: bool = False) -> int:
     layers = list(_layers(model))
     for i, layer in enumerate(layers):
         nxt = layers[i + 1] if i + 1 < len(layers) else None
-        if fused is None:
+        if mlp_block is not None:
+            def tail(x, r, _l=layer):
+                if x.size == x.shape[-1]:  # one token: decode, the 2-kernel block
+                    return [mlp_block(x, r, _l)]
+                h = x + r  # prefill: stock (the kernels read every weight once per row)
+                return [h + _l.mlp(_l.post_attention_layernorm(h))]
+        elif fused is None:
             def tail(x, r, _l=layer):
                 h = x + r
                 return [h + _l.mlp(_l.post_attention_layernorm(h))]
@@ -491,8 +565,10 @@ def _generate(mx, model, make_prompt_cache, prompt, gen_tokens: int):
 
 def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | None = None,
         prompt_tokens: int = 512, gen_tokens: int = 128, repeats: int = 5, on_progress=print,
-        champions: dict[str, tuple[Kernel, dict]] | None = None) -> list[Result]:
+        champions: dict[str, tuple[Kernel, dict]] | None = None,
+        mlp_kernels: dict[str, tuple[Kernel, dict]] | None = None) -> list[Result]:
     """`champions` ({regime: (kernel, config)}) runs each regime's own champion; else `kernel` everywhere.
+    `mlp_kernels` ({"mlp_up": (kernel, config), "mlp_down": ...}) is what mode mlp runs.
     All modes are loaded at once and take `repeats` turns each, in rotating order."""
     import numpy as np
     mx, nn, load, make_prompt_cache = _imports()
@@ -501,6 +577,8 @@ def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | Non
         parts(m)  # fail on a typo before loading anything
     if any("kernel" in parts(m) for m in modes) and kernel is None and not champions:
         raise SystemExit("no residual_rmsnorm kernel: run `carmen run residual_rmsnorm` or pass --kernel golden")
+    if any("mlp" in parts(m) for m in modes) and not mlp_kernels:
+        raise SystemExit("mode mlp needs mlp_up and mlp_down kernels (pass --kernel golden, or run them with carmen)")
     loaded, prompt, wbytes = {}, None, None
     for mode in modes:
         on_progress(f"{mode}: loading {name}")
@@ -513,12 +591,16 @@ def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | Non
         p = parts(mode)
         if "plumbing" in p:
             on_progress(f"{mode}: merged gate+up in {apply_plumbing(mx, nn, model)} layers")
-        if "kernel" in p or "compile" in p:
-            fused = None
+        if "kernel" in p or "compile" in p or "mlp" in p:
+            fused = block = None
             if "kernel" in p:
                 fused = make_regime_fused(mx, champions) if champions else make_fused(mx, kernel, config)
-            n = apply_layers(mx, model, fused, compile_tail="compile" in p)
+            if "mlp" in p:
+                check_quantized(model)
+                block = make_mlp(mx, mlp_kernels)
+            n = apply_layers(mx, model, fused, compile_tail="compile" in p, mlp_block=block)
             on_progress(f"{mode}: " + " + ".join(x for x in (("carmen kernel" if fused else ""),
+                                                             ("carmen mlp_up + mlp_down at decode" if block else ""),
                                                              ("compiled layer tails" if "compile" in p else "")) if x)
                         + f" in {n} layers")
         _generate(mx, model, make_prompt_cache, prompt, 8)  # warm up: compile kernels, fill caches

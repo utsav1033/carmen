@@ -11,17 +11,19 @@ FAST = {"timing_shapes": [[64, 1000]], "timing_dtypes": ["float32"]}
 
 
 def run(source, op="softmax", configs=None, hidden_seed=None):
-    default = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}]}.get(op, [{"TG": 256}])
+    default = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}],
+               "mlp_up": [{"TG": 256, "BN": 8}], "mlp_down": [{"TG": 256, "BN": 8}]}.get(op, [{"TG": 256}])
     k = Kernel(source, configs=configs or default)
     req = judge.build_request(op, k, round_seed=1, hidden_seed=hidden_seed, peak=100.0)
     req.update(FAST)
     if ops.get(op).dims == 3:
-        req["timing_shapes"] = [[64, 64, 96]]
+        req["timing_shapes"] = [[1, 64, 128]] if op.startswith("mlp") else [[64, 64, 96]]
     from carmen.judge import worker
     return worker.evaluate(req, FakeAdapter())
 
 
-@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul", "attention", "residual_rmsnorm"])
+@pytest.mark.parametrize("op", ["softmax", "masked_softmax", "layernorm", "rmsnorm", "add_rmsnorm", "matmul", "attention", "residual_rmsnorm",
+                                "mlp_up", "mlp_down"])
 def test_correct_kernel_passes_everything(op):
     v = run("good", op, hidden_seed=7)
     assert v["correct"], v["configs"][0]["failures"]
@@ -140,7 +142,7 @@ def test_bf16_is_in_every_battery_and_round_trips_exactly():
         assert any(c.dtype == "bfloat16" for c in spec.visible)
         assert any(c.dtype == "bfloat16" for c in hidden_cases(spec, 3))
         assert any(c.dtype == "bfloat16" for c in fuzz_cases(spec, 3))
-        x = spec.materialize(Case("normal", 2, 300, "bfloat16", 1, "", 40 if spec.dims == 3 else 0))[spec.input_names[0]]
+        x = spec.materialize(Case("normal", 2, 300, "bfloat16", 1, "", (128 if spec.keep_inner_on_shrink else 40) if spec.dims == 3 else 0))[spec.input_names[0]]
         assert np.array_equal(x, to_bf16(x))  # already exact bf16 values
 
 
@@ -212,3 +214,24 @@ def test_residual_rmsnorm_writes_both_outputs_and_catches_a_hardcoded_eps():
     v = run("eps_hardcoded", "residual_rmsnorm")
     assert not v["correct"]
     assert any(f["case"].startswith("tiny_rows") for c in v["configs"] for f in c["failures"])
+
+
+@pytest.mark.parametrize("op", ["mlp_up", "mlp_down"])
+@pytest.mark.parametrize("bug", ["mlp_bias_dropped", "mlp_nibbles_reversed"])
+def test_quantized_mlp_bugs_are_caught(op, bug):
+    v = run(bug, op)
+    assert not v["correct"]
+
+
+def test_quantized_weights_stay_integers_in_every_dtype():
+    from carmen.ops.base import Case
+    op = ops.get("mlp_up")
+    d = op.materialize(Case("normal", 1, 33, "bfloat16", 3, "t", 128))
+    assert d["gq"].dtype == np.uint32 and d["gs"].dtype == np.float32  # bf16 values held as float32
+    assert np.isfinite(op.reference(d)).all()
+
+
+def test_mlp_shrink_keeps_k_a_multiple_of_64():
+    v = run("mlp_bias_dropped", "mlp_down")
+    f = v["configs"][0]["failures"][0]
+    assert f.get("smallest_failing") and "crashes" not in f["smallest_failing"]

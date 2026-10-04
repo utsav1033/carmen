@@ -132,6 +132,48 @@ MUTANTS_BY_OP = {
                "h is x alone: the block's output never joins the residual"),
     ],
     "attention": ATTENTION_MUTANTS,
+    "mlp_up": [
+        Mutant("fp16_accumulate", "precision", "float g = 0.0f, u = 0.0f;", "half g = 0.0h, u = 0.0h;",
+               "dot products summed in half: long rows lose precision"),
+        Mutant("silu_overflows", "precision", "T(g / (1.0f + metal::exp(-g)) * u)",
+               "T(metal::exp(g) / (1.0f + metal::exp(g)) * g * u)", "silu as e^g/(1+e^g): inf/inf = NaN for big g"),
+        Mutant("bias_dropped", "semantic", "+ bgv) * hn;", ") * hn;", "gate weights lose their per-group bias"),
+        Mutant("nibble_order_reversed", "indexing", "float((qg >> (4 * t)) & 0xFu)", "float((qg >> (4 * (7 - t))) & 0xFu)",
+               "reads the 8 values of a word highest-first"),
+        Mutant("wrong_group", "indexing", "const int grp = j * groups + k0 / 64;", "const int grp = j * groups + k0 / 128;",
+               "scale and bias from the wrong group once K > 64"),
+        Mutant("last_column_dropped", "boundary", "if (j >= n) { break; }", "if (j >= n - 1) { break; }",
+               "the last output column is never written"),
+        Mutant("last_word_dropped", "boundary", "for (int wd = lane; wd < words; wd += 32)",
+               "for (int wd = lane; wd < words - 1; wd += 32)", "the last 8 values of K are left out of the dot product"),
+        Mutant("eps_dropped", "semantic", "+ eps[0])", ")", "no eps: a zero row divides by zero"),
+        Mutant("residual_not_added", "semantic", "const float hn = (float(xr[k]) + float(rr[k]))",
+               "const float hn = (float(xr[k]))", "the matmuls see x, not x + res"),
+        Mutant("barrier_removed", "sync", "threadgroup_barrier(mem_flags::mem_threadgroup);\nconst float inv",
+               "const float inv", "race: threads read the sum before it is written"),
+        Mutant("partial_simd_reduce", "indexing", "(lane < n_sg) ? shared[lane]", "(lane < n_sg / 2) ? shared[lane]",
+               "half the simdgroups dropped from the norm's sum"),
+        Mutant("wrong_row_stride", "indexing", "out[row * n + j]", "out[row * (n - 1) + j]", "rows overlap in the output"),
+        Mutant("gate_up_swapped", "semantic", "T(g / (1.0f + metal::exp(-g)) * u)", "T(u / (1.0f + metal::exp(-u)) * g)",
+               "silu applied to up instead of gate"),
+    ],
+    "mlp_down": [
+        Mutant("fp16_accumulate", "precision", "float acc = 0.0f;", "half acc = 0.0h;",
+               "dot product summed in half: long rows lose precision"),
+        Mutant("bias_dropped", "semantic", "+ bv) *", ") *", "weights lose their per-group bias"),
+        Mutant("nibble_order_reversed", "indexing", "(q >> (4 * t))", "(q >> (4 * (7 - t)))",
+               "reads the 8 values of a word highest-first"),
+        Mutant("wrong_group", "indexing", "const int grp = j * groups + k0 / 64;", "const int grp = j * groups + k0 / 128;",
+               "scale and bias from the wrong group once K > 64"),
+        Mutant("last_column_dropped", "boundary", "if (j >= n) { break; }", "if (j >= n - 1) { break; }",
+               "the last output column is never written"),
+        Mutant("last_word_dropped", "boundary", "for (int wd = lane; wd < words; wd += 32)",
+               "for (int wd = lane; wd < words - 1; wd += 32)", "the last 8 values of K are left out of the dot product"),
+        Mutant("residual_dropped", "semantic", "float(x[row * n + j]) + float(res[row * n + j]) + acc",
+               "float(x[row * n + j]) + acc", "the attention output never joins the residual stream"),
+        Mutant("wrong_act_row", "indexing", "auto ar = act + row * K;", "auto ar = act + row * (K - 8);",
+               "rows after the first read the wrong activations"),
+    ],
     "matmul": MATMUL_MUTANTS,
     "layernorm": NORM_MUTANTS,
     "rmsnorm": NORM_MUTANTS,
@@ -146,7 +188,8 @@ def has_golden(op: str) -> bool:
     return (GOLDEN_DIR / f"{op}.metal").exists()
 
 
-GOLDEN_CONFIGS = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}]}
+GOLDEN_CONFIGS = {"matmul": [{"TG": 256, "BM": 32, "BN": 32}], "attention": [{"TG": 64, "BQ": 1}],
+                  "mlp_up": [{"TG": 256, "BN": 8}], "mlp_down": [{"TG": 256, "BN": 8}]}
 
 
 def golden(op: str) -> Kernel:

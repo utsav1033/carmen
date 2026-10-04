@@ -53,7 +53,35 @@ def _attention32(inputs, offset_aware=True):
     return (p / p.sum(axis=-1, keepdims=True)) @ v
 
 
+def _deq32(q, s, b, nibble_order=range(8), bias=True):
+    vals = np.stack([(q >> np.uint32(4 * t)) & np.uint32(0xF) for t in nibble_order], axis=-1)
+    vals = vals.reshape(q.shape[0], -1).astype(np.float32)
+    return np.repeat(s.astype(np.float32), 64, 1) * vals + (np.repeat(b.astype(np.float32), 64, 1) if bias else 0)
+
+
+def _mlp32(op_name, inputs, **kw):
+    if op_name == "mlp_down":
+        y = inputs["act"].astype(np.float32) @ _deq32(inputs["dq"], inputs["ds"], inputs["db"], **kw).T
+        return inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32) + y
+    h = inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32)
+    hn = h / np.sqrt((h * h).mean(axis=-1, keepdims=True) + inputs["eps"][0]) * inputs["w"].astype(np.float32)
+    g = hn @ _deq32(inputs["gq"], inputs["gs"], inputs["gb"], **kw).T
+    u = hn @ _deq32(inputs["uq"], inputs["us"], inputs["ub"], **kw).T
+    with np.errstate(over="ignore"):
+        return g / (1 + np.exp(-g)) * u
+
+
+def mlp_bias_dropped(op_name, inputs, cfg):
+    return _mlp32(op_name, inputs, bias=False)
+
+
+def mlp_nibbles_reversed(op_name, inputs, cfg):
+    return _mlp32(op_name, inputs, nibble_order=range(7, -1, -1))
+
+
 def good(op_name, inputs, cfg):
+    if op_name in ("mlp_up", "mlp_down"):
+        return _mlp32(op_name, inputs)
     if op_name == "residual_rmsnorm":
         h = inputs["x"].astype(np.float32) + inputs["res"].astype(np.float32)
         y = h / np.sqrt((h * h).mean(axis=-1, keepdims=True) + inputs["eps"][0]) * inputs["w"].astype(np.float32)
@@ -140,7 +168,7 @@ def eps_hardcoded(op_name, inputs, cfg):
 KERNELS = {f.__name__: f for f in (good, no_max_subtraction, drops_last_element, stores_through_fp16,
                                     racy, zeros, bad_when_big_tg, writes_past_end, one_pass_variance,
                                     wrong_leading_dim, cache_offset_ignored,
-                                    eps_hardcoded)}
+                                    eps_hardcoded, mlp_bias_dropped, mlp_nibbles_reversed)}
 
 
 class FakeAdapter:
