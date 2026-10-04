@@ -38,9 +38,9 @@ def test_e2e_command_reports_speed_and_answers(tmp_path, monkeypatch, capsys):
 def test_calls_command_prints_where_the_time_goes(tmp_path, monkeypatch, capsys):
     _run_dir(tmp_path, "20261002-000000", "residual_rmsnorm", "0-1")
     T = e2e.CallTiming
-    fake = [T("stock: x + r, then rms_norm", 1, 10.0, 4.0), T("carmen, as e2e calls it", 1, 40.0, 30.0),
+    fake = [T("stock: x + r, then rms_norm", 1, 10.0, 4.0), T("carmen, compiled call (what e2e uses)", 1, 40.0, 30.0),
             T("carmen, prebuilt + mx.compile", 1, float("nan"), float("nan"), "ValueError: nope"),
-            T("stock: x + r, then rms_norm", 512, 20.0, 4.0), T("carmen, as e2e calls it", 512, 25.0, 30.0)]
+            T("stock: x + r, then rms_norm", 512, 20.0, 4.0), T("carmen, compiled call (what e2e uses)", 512, 25.0, 30.0)]
     monkeypatch.setattr(e2e, "call_bench", lambda *a, **k: fake)
     assert cli.main(["e2e", "--calls", "--runs", str(tmp_path)]) == 0
     out = capsys.readouterr().out

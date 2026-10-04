@@ -125,52 +125,75 @@ def apply_plumbing(mx, nn, model) -> int:
     return changed
 
 
-def make_fused(mx, kernel: Kernel, config: dict):
-    """carmen's residual_rmsnorm as a function (x, res, norm) -> (h, y)."""
-    from . import ops
-    op = ops.get(OP)
-    k = mx.fast.metal_kernel(name=f"carmen_{OP}_{kernel.digest()}", input_names=list(op.input_names),
-                             output_names=["out"], source=kernel.source, header=kernel.header)
-    eps_cache: dict[float, object] = {}
-
-    def fused(x, res, norm):
-        shape, n = x.shape, x.shape[-1]
-        rows = x.size // n
-        eps = float(getattr(norm, "eps", 1e-5))
-        if eps not in eps_cache:
-            eps_cache[eps] = mx.array([eps], dtype=mx.float32)
-        grid, tg = op.grid(rows, n, config)
-        (out,) = k(inputs=[x.reshape(rows, n), res.reshape(rows, n), norm.weight, eps_cache[eps]],
-                   template=[("T", x.dtype)] + list(config.items()), grid=grid, threadgroup=tg,
-                   output_shapes=[(2, rows, n)], output_dtypes=[x.dtype])
-        return out[0].reshape(shape), out[1].reshape(shape)
-    return fused
-
-
-def make_fused_prebuilt(mx, kernel: Kernel, config: dict):
-    """Same kernel, but everything that only depends on the shape (template, grid, eps array,
-    output shape) is built once per shape, so a call does the least Python possible."""
+def make_raw(mx, kernel: Kernel, config: dict):
+    """carmen's residual_rmsnorm as a plain function (x, res, w, eps) -> (h, y). Everything that
+    depends only on the shape (template, grid, eps array) is built once per shape."""
     from . import ops
     op = ops.get(OP)
     k = mx.fast.metal_kernel(name=f"carmen_{OP}_{kernel.digest()}", input_names=list(op.input_names),
                              output_names=["out"], source=kernel.source, header=kernel.header)
     plans: dict = {}
 
-    def fused(x, res, norm):
-        key = (x.shape, x.dtype, id(norm))
+    def raw(x, res, w, eps: float):
+        key = (x.shape, x.dtype, eps)
         p = plans.get(key)
         if p is None:
             n = x.shape[-1]
             rows = x.size // n
             grid, tg = op.grid(rows, n, config)
-            eps = mx.array([float(getattr(norm, "eps", 1e-5))], dtype=mx.float32)
-            p = plans[key] = (rows, n, x.shape, eps, [("T", x.dtype)] + list(config.items()), grid, tg,
-                              [(2, rows, n)], [x.dtype])
-        rows, n, shape, eps, template, grid, tg, out_shapes, out_dtypes = p
-        (out,) = k(inputs=[x.reshape(rows, n), res.reshape(rows, n), norm.weight, eps], template=template,
+            p = plans[key] = (rows, n, mx.array([eps], dtype=mx.float32), [("T", x.dtype)] + list(config.items()),
+                              grid, tg, [(2, rows, n)], [x.dtype])
+        rows, n, eps_arr, template, grid, tg, out_shapes, out_dtypes = p
+        (out,) = k(inputs=[x.reshape(rows, n), res.reshape(rows, n), w, eps_arr], template=template,
                    grid=grid, threadgroup=tg, output_shapes=out_shapes, output_dtypes=out_dtypes)
-        return out[0].reshape(shape), out[1].reshape(shape)
+        return out[0].reshape(x.shape), out[1].reshape(x.shape)
+    return raw
+
+
+def make_fused(mx, kernel: Kernel, config: dict, compiled: bool = True):
+    """(x, res, norm) -> (h, y). Compiled by default: `carmen e2e --calls` measured the plain call
+    at 28.5 us vs 17.3 us compiled at decode (Qwen 0.5B, M4), from the reshapes and slices around it."""
+    raw = make_raw(mx, kernel, config)
+    per_eps: dict[float, object] = {}
+
+    def fused(x, res, norm):
+        eps = float(getattr(norm, "eps", 1e-5))
+        if not compiled:
+            return raw(x, res, norm.weight, eps)
+        f = per_eps.get(eps)
+        if f is None:
+            f = per_eps[eps] = mx.compile(lambda x_, r_, w_: raw(x_, r_, w_, eps))
+        return f(x, res, norm.weight)
     return fused
+
+
+def make_regime_fused(mx, champions: dict[str, tuple[Kernel, dict]]):
+    """One fused function that calls the decode champion for 1-row inputs and the prefill
+    champion otherwise: each use case runs the kernel that won it."""
+    fns = {name: make_fused(mx, k, cfg) for name, (k, cfg) in champions.items()}
+    one, many = fns.get("decode") or fns["prefill"], fns.get("prefill") or fns["decode"]
+
+    def fused(x, res, norm):
+        return (one if x.size == x.shape[-1] else many)(x, res, norm)
+    return fused
+
+
+def latest_regime_champions(runs_dir: Path, op: str = OP) -> tuple[dict[str, tuple[Kernel, dict]], str, dict] | None:
+    """Per-regime champions of the newest targeted run of `op`: ({regime: (kernel, config)}, run id, summary)."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return None
+    for d in sorted((p for p in runs_dir.iterdir() if p.is_dir()), reverse=True):
+        ev, sm = d / "events.jsonl", d / "summary.json"
+        if not ev.exists() or not sm.exists():
+            continue
+        summary = json.loads(sm.read_text())
+        if json.loads(ev.read_text().splitlines()[0]).get("op") != op or not summary.get("regime_champions"):
+            continue
+        champs = {name: (Kernel.from_json(json.loads((d / "attempts" / c["attempt"] / "kernel.json").read_text())),
+                         c["config"]) for name, c in summary["regime_champions"].items()}
+        return champs, d.name, summary
+    return None
 
 
 # ── where does the time of one call go? ───────────────────────────────────────────────
@@ -187,22 +210,64 @@ class CallTiming:
     error: str | None = None
 
 
-def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_progress=print) -> list[CallTiming]:
-    """Time one residual-add + rmsnorm call several ways at the model's real shape, to see whether
-    the GPU work or the cost of calling the kernel decides the speed inside a model."""
+def _chain_timer(mx):
     import numpy as np
+
+    def measure(f, x0, r) -> tuple[float, float]:
+        """(total us, python us) per call, over CALL_CHAIN dependent calls like one word of decode."""
+        def chain():
+            x, h = x0, None
+            for _ in range(CALL_CHAIN):  # each call feeds the next, like layers in a model
+                h, x = f(x, r)
+            return [h, x]
+        for _ in range(3):
+            mx.eval(chain())
+        py, tot = [], []
+        for _ in range(CALL_REPS):
+            t0 = time.perf_counter()
+            outs = chain()
+            t1 = time.perf_counter()
+            mx.eval(outs)
+            t2 = time.perf_counter()
+            py.append((t1 - t0) / CALL_CHAIN)
+            tot.append((t2 - t0) / CALL_CHAIN)
+        return float(np.median(tot)) * 1e6, float(np.median(py)) * 1e6
+    return measure
+
+
+def _model_norm(name: str, on_progress):
     mx, nn, load, _ = _imports()
     on_progress(f"loading {name} for its norm weights")
     model, _ = load(name)
     norm = _layers(model)[0].post_attention_layernorm
+    del model
+    return mx, norm
+
+
+def _inputs(mx, rows: int, norm):
     n, dt = norm.weight.shape[0], norm.weight.dtype
+    x0 = mx.random.normal((1, rows, n)).astype(dt)
+    r = (mx.random.normal((1, rows, n)) * 0.1).astype(dt)
+    mx.eval(x0, r)
+    return x0, r
+
+
+def _stock(mx, norm):
     eps = float(getattr(norm, "eps", 1e-5))
-    slow, fast = make_fused(mx, kernel, config), make_fused_prebuilt(mx, kernel, config)
 
     def stock(x, r):
         h = x + r
         return h, mx.fast.rms_norm(h, norm.weight, eps)
+    return stock
 
+
+def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_progress=print) -> list[CallTiming]:
+    """Time one residual-add + rmsnorm call several ways at the model's real shape, to see whether
+    the GPU work or the cost of calling the kernel decides the speed inside a model."""
+    mx, norm = _model_norm(name, on_progress)
+    measure = _chain_timer(mx)
+    stock = _stock(mx, norm)
+    plain, comp = make_fused(mx, kernel, config, compiled=False), make_fused(mx, kernel, config)
     empty = mx.fast.metal_kernel(name="carmen_empty", input_names=["x"], output_names=["out"],
                                  source="if (thread_position_in_grid.x == 0) { out[0] = x[0]; }")
     variants = {
@@ -211,38 +276,60 @@ def call_bench(name: str, kernel: Kernel, config: dict, rows_list=(1, 512), on_p
                                                         output_shapes=[x.shape], output_dtypes=[x.dtype])[0], x),
         "stock: x + r, then rms_norm": stock,
         "stock, mx.compile": mx.compile(stock),
-        "carmen, as e2e calls it": lambda x, r: slow(x, r, norm),
-        "carmen, prebuilt args": lambda x, r: fast(x, r, norm),
-        "carmen, prebuilt + mx.compile": mx.compile(lambda x, r: fast(x, r, norm)),
+        "carmen, plain call": lambda x, r: plain(x, r, norm),
+        "carmen, compiled call (what e2e uses)": lambda x, r: comp(x, r, norm),
     }
     out = []
     for rows in rows_list:
-        x0 = mx.random.normal((1, rows, n)).astype(dt)
-        r = (mx.random.normal((1, rows, n)) * 0.1).astype(dt)
-        mx.eval(x0, r)
-        on_progress(f"timing {len(variants)} ways at {rows} x {n} {str(dt).split('.')[-1]}")
+        x0, r = _inputs(mx, rows, norm)
+        on_progress(f"timing {len(variants)} ways at {rows} x {x0.shape[-1]} {str(x0.dtype).split('.')[-1]}")
         for label, f in variants.items():
-            def chain():
-                x, h = x0, None
-                for _ in range(CALL_CHAIN):  # each call feeds the next, like layers in a model
-                    h, x = f(x, r)
-                return [h, x]
             try:
-                for _ in range(3):
-                    mx.eval(chain())
-                py, tot = [], []
-                for _ in range(CALL_REPS):
-                    t0 = time.perf_counter()
-                    outs = chain()
-                    t1 = time.perf_counter()
-                    mx.eval(outs)
-                    t2 = time.perf_counter()
-                    py.append((t1 - t0) / CALL_CHAIN)
-                    tot.append((t2 - t0) / CALL_CHAIN)
-                out.append(CallTiming(label, rows, float(np.median(tot)) * 1e6, float(np.median(py)) * 1e6))
+                out.append(CallTiming(label, rows, *measure(f, x0, r)))
             except Exception as e:  # report it, don't hide it: a variant that can't run is a finding
                 out.append(CallTiming(label, rows, float("nan"), float("nan"), f"{type(e).__name__}: {e}"[:160]))
-    del model
+    return out
+
+
+@dataclass
+class Holdout:
+    regime: str
+    rows: int
+    stock_us: float
+    compiled_us: float
+    carmen_us: float
+    judge_vs_compiled: float  # what the judge measured for this regime's champion
+
+    @property
+    def vs_compiled(self) -> float:
+        return self.compiled_us / self.carmen_us
+
+    @property
+    def vs_stock(self) -> float:
+        return self.stock_us / self.carmen_us
+
+    @property
+    def agrees(self) -> bool:
+        """Same side of 1.0 and within 25%: the judge's number survived contact with the model."""
+        j, m = self.judge_vs_compiled, self.vs_compiled
+        return (j >= 1) == (m >= 1) and abs(m / j - 1) <= 0.25
+
+
+def holdout(name: str, champions: dict[str, tuple[Kernel, dict, int, float]], on_progress=print) -> list[Holdout]:
+    """The frozen final check: each regime's champion called the way the model calls it (compiled,
+    48 calls chained, real norm weights and dtype), vs stock and mx.compile(stock). Carmy never sees
+    this number, so it can't be optimized against; it only says whether the judge's score holds."""
+    mx, norm = _model_norm(name, on_progress)
+    measure = _chain_timer(mx)
+    stock = _stock(mx, norm)
+    stock_c = mx.compile(stock)
+    out = []
+    for regime, (kernel, config, rows, judged) in champions.items():
+        x0, r = _inputs(mx, rows, norm)
+        f = make_fused(mx, kernel, config)
+        on_progress(f"in-model check: {regime} champion at {rows} x {x0.shape[-1]}")
+        out.append(Holdout(regime, rows, measure(stock, x0, r)[0], measure(stock_c, x0, r)[0],
+                           measure(lambda x, r_: f(x, r_, norm), x0, r)[0], judged))
     return out
 
 
@@ -298,7 +385,9 @@ def _generate(mx, model, make_prompt_cache, prompt, gen_tokens: int):
 
 
 def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | None = None,
-        prompt_tokens: int = 512, gen_tokens: int = 128, repeats: int = 3, on_progress=print) -> list[Result]:
+        prompt_tokens: int = 512, gen_tokens: int = 128, repeats: int = 3, on_progress=print,
+        champions: dict[str, tuple[Kernel, dict]] | None = None) -> list[Result]:
+    """`champions` ({regime: (kernel, config)}) runs each regime's own champion; else `kernel` everywhere."""
     mx, nn, load, make_prompt_cache = _imports()
     results, stock_ids, stock_logits = [], None, None
     for mode in modes:
@@ -309,9 +398,10 @@ def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | Non
         if mode in ("plumbing", "both"):
             on_progress(f"{mode}: merged gate+up in {apply_plumbing(mx, nn, model)} layers")
         if mode in ("kernel", "both"):
-            if kernel is None:
+            if kernel is None and not champions:
                 raise SystemExit("no residual_rmsnorm kernel: run `carmen run residual_rmsnorm` or pass --kernel golden")
-            on_progress(f"{mode}: carmen kernel in {apply_kernel(mx, model, make_fused(mx, kernel, config))} layers")
+            fused = make_regime_fused(mx, champions) if champions else make_fused(mx, kernel, config)
+            on_progress(f"{mode}: carmen kernel in {apply_kernel(mx, model, fused)} layers")
         _generate(mx, model, make_prompt_cache, prompt, 8)  # warm up: compile kernels, fill caches
         best = None
         for _ in range(repeats):

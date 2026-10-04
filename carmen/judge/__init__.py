@@ -57,17 +57,25 @@ def peak_gbps(backend: str = "metal", refresh: bool = False, timeout: float = 30
 
 def build_request(op_name: str, kernel: Kernel, *, round_seed: int | None = None,
                   hidden_seed: int | None = None, corpus: list[Case] = (), backend: str = "metal",
-                  peak: float | None = None, skip_timing: bool = False) -> dict:
+                  peak: float | None = None, skip_timing: bool = False, target: dict | None = None) -> dict:
     op = ops.get(op_name)
     visible = list(op.visible) + list(corpus)
     if round_seed is not None:
         visible += fuzz_cases(op, round_seed)
     req = {"op": op_name, "backend": backend, "kernel": kernel.to_json(),
            "visible": [c.to_json() for c in visible], "peak_gbps": peak, "skip_timing": skip_timing}
+    if target:
+        req["target"] = target
+        # The target's dtype joins the correctness battery too: a kernel must be right where it runs.
+        req["visible"] += [c.to_json() for c in _target_cases(op, target)]
     if hidden_seed is not None:
         req["hidden"] = [c.to_json() for c in hidden_cases(op, hidden_seed)]
         req["hidden_timing_shapes"] = hidden_timing_shapes(hidden_seed, op.dims, op.sizes)
     return req
+
+
+def _target_cases(op, target: dict) -> list[Case]:
+    return [Case("normal", rows, n, target["dtype"], rows * 7 + n, "target") for rows, n in target["regimes"].values()]
 
 
 def judge(op_name: str, kernel: Kernel, *, adapter=None, timeout: float = 900, **kw) -> dict:
@@ -102,7 +110,15 @@ def feedback(v: dict) -> str:
         if f.get("detail"):
             msg += f"\n{f['detail']}"
         lines.append(msg + ".")
-    if v.get("correct"):
+    if v.get("correct") and v.get("regimes"):
+        lines.append(f"\nSpeed at the target's shapes; score = geomean speedup vs mx.compile(stock) = {v['score']:.2f}x:")
+        for r in v["regimes"].values():
+            cfg = " ".join(f"{k}={val}" for k, val in r["config"].items())
+            lines.append(f"  {r['regime']} {'x'.join(map(str, r['shape']))} {r['dtype']} [{cfg}]: {r['ms'] * 1e3:.1f} us "
+                         f"vs stock {r['baseline_ms'] * 1e3:.1f} us ({r['speedup']:.2f}x), vs mx.compile "
+                         f"{r['compiled_ms'] * 1e3:.1f} us -> {r['speedup_compiled']:.2f}x "
+                         f"[{r['ci_compiled'][0]:.2f}, {r['ci_compiled'][1]:.2f}]")
+    elif v.get("correct"):
         best = " ".join(f"{k}={val}" for k, val in v["best_config"].items())
         lines.append(f"\nSpeed (best config {best}) vs the stock MLX op, geomean {v['speedup_geomean']:.2f}x:")
         for r in v["timing"]:

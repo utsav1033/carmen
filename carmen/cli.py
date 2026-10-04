@@ -154,17 +154,54 @@ def cmd_run(args) -> int:
         elif t == "stopped":
             print(ui.s(f"  stopped: {d['reason']}", "grey"))
 
+    tgt = None
+    if args.for_model:
+        from . import target
+        print(ui.s(f"reading {args.for_model} for its shapes and number format", "grey"))
+        tgt = target.resolve(args.op, args.for_model, args.prompt)
+        print(f"target: {ui.s(tgt.model, 'bold')} · {tgt.dtype} · "
+              + ", ".join(f"{k} {'x'.join(map(str, v))}" for k, v in tgt.regimes.items()))
+        print(ui.s(f"score, declared before the run: {tgt.metric}", "grey"))
     try:
         summary = loop.run(args.op, rounds=args.rounds, k=args.k, mode=args.mode, model=args.model,
                            effort=args.effort, backend=args.backend, runs_dir=Path(args.runs),
-                           memory_dir=Path(args.memory), patience=args.patience, peak=peak, on_event=on_event)
+                           memory_dir=Path(args.memory), patience=args.patience, peak=peak, on_event=on_event,
+                           target=tgt.to_json() if tgt else None)
     except CarmyAuthError as e:
         print(f"\n{ui.BAD} {e}")
         print(ui.s("Check ANTHROPIC_API_KEY (and ANTHROPIC_BASE_URL if you use a proxy) in .env, and that no old key is exported in your shell.", "grey"))
         return 2
     ui.rule("result")
     _print_summary(summary)
+    if tgt and summary.get("regime_champions"):
+        _holdout(args, summary)
     return 0
+
+
+def _holdout(args, summary: dict) -> None:
+    """The frozen final check, inside the real model. Carmy never saw it."""
+    from . import e2e
+    ui.rule("held-out check: inside the model")
+    if args.op != e2e.OP:
+        print(ui.s(f"only {e2e.OP} is wired into a model so far; {args.op}'s champions are judged, not model-checked.",
+                   "grey"))
+        return
+    run_dir = Path(summary["run_dir"])
+    champs = {}
+    for regime, c in summary["regime_champions"].items():
+        k = Kernel.from_json(json.loads((run_dir / "attempts" / c["attempt"] / "kernel.json").read_text()))
+        champs[regime] = (k, c["config"], c["shape"][0], c["speedup_compiled"])
+    results = e2e.holdout(summary["target"]["model"], champs, on_progress=lambda m: print(ui.s("  " + m, "grey")))
+    rows = [[h.regime, summary["regime_champions"][h.regime]["attempt"], ui.speed(h.judge_vs_compiled),
+             ui.speed(h.vs_compiled), ui.speed(h.vs_stock), f"{h.carmen_us:.1f} / {h.compiled_us:.1f} us",
+             ui.s(f"{ui.OK} holds", "green") if h.agrees else ui.s("judge was wrong", "yellow")] for h in results]
+    ui.table(["regime", "champion", "judge vs compile", "in model vs compile", "in model vs stock",
+              "carmen / compiled", ""], rows, align="llrrrrl")
+    summary["holdout"] = [{**h.__dict__, "vs_compiled": h.vs_compiled, "vs_stock": h.vs_stock, "agrees": h.agrees}
+                          for h in results]
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
+    print(ui.s("in model = called the way `carmen e2e` calls it (compiled, 48 calls chained, the model's norm "
+               "weights). Agrees = same side of 1.0 and within 25% of the judge.", "grey"))
 
 
 def _print_summary(sm: dict) -> None:
@@ -179,6 +216,13 @@ def _print_summary(sm: dict) -> None:
         ["on hidden sizes", ui.speed(sm.get("hidden_speedup"))],
         ["worst % of peak", ui.pct(sm.get("pct_peak_min"))],
     ])
+    if sm.get("regime_champions"):
+        t = sm["target"]
+        print(f"\ntarget {ui.s(t['model'], 'bold')} · {t['dtype']} · champion per regime (score vs mx.compile):")
+        ui.table(["regime", "shape", "champion", "config", "vs stock", "vs mx.compile"], [
+            [name, "x".join(map(str, c["shape"])), c["attempt"], " ".join(f"{k}={v}" for k, v in c["config"].items()),
+             ui.speed(c["speedup"]), ui.speed(c["speedup_compiled"])] for name, c in sm["regime_champions"].items()],
+            align="lllrrr")
     print(ui.s(f"\nrun saved to {sm['run_dir']}", "grey"))
 
 
@@ -249,12 +293,20 @@ def cmd_profile(args) -> int:
 def cmd_e2e(args) -> int:
     from . import e2e
     ui.banner(f"e2e · {args.model}")
-    kernel = config = kernel_id = None
+    kernel = config = kernel_id = champions = None
     modes = [m.strip() for m in args.modes.split(",")]
     if args.calls or any(m in ("kernel", "both") for m in modes):
         if args.kernel == "golden":
             kernel = broken.golden(e2e.OP)
             config, kernel_id = kernel.configs[0], "golden reference kernel"
+        elif args.kernel == "latest" and (rc := e2e.latest_regime_champions(Path(args.runs))):
+            champions, run_id, sm = rc
+            kernel, config = next(iter(champions.values()))
+            kernel_id = f"{run_id}:" + ",".join(f"{k}={c['attempt']}" for k, c in sm["regime_champions"].items())
+            print(f"kernels: a champion per regime from {ui.s(run_id, 'bold')} (targeted at {sm['target']['model']})")
+            for name, c in sm["regime_champions"].items():
+                print(ui.s(f"  {name}: {c['attempt']} {c['config']}, judge {c['speedup_compiled']:.2f}x vs mx.compile",
+                           "grey"))
         else:
             found = e2e.latest_champion(Path(args.runs))
             if not found:
@@ -270,7 +322,7 @@ def cmd_e2e(args) -> int:
     if "stock" not in modes:
         modes = ["stock"] + modes  # every comparison is against stock
     results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
-                      on_progress=lambda m: print(ui.s("  " + m, "grey")))
+                      on_progress=lambda m: print(ui.s("  " + m, "grey")), champions=champions)
     stock = results[0]
     ui.rule("result")
     rows = []
@@ -306,7 +358,7 @@ def _print_calls(e2e, args, kernel, config, kernel_id) -> int:
                         ui.speed(stock.total_us / t.total_us) if t is not stock else "reference", ""])
         ui.table(["how", "total", "python", "vs stock", ""], tbl, align="lrrrl")
     one = {t.variant: t for t in timings if t.rows == 1}
-    s, c = one["stock: x + r, then rms_norm"], one["carmen, as e2e calls it"]
+    s, c = one["stock: x + r, then rms_norm"], one["carmen, compiled call (what e2e uses)"]
     extra = (c.total_us - s.total_us) * e2e.CALL_CHAIN / 1e3
     print(ui.s(f"\ntotal = Python + GPU per call, {e2e.CALL_CHAIN} calls in a row like one word of decode. "
                f"python = just building the call. At 1 row, carmen as e2e calls it costs {extra:+.2f} ms per word "
@@ -413,6 +465,10 @@ def main(argv=None) -> int:
     p.add_argument("--patience", type=int, default=2)
     p.add_argument("--runs", default="runs")
     p.add_argument("--memory", default="memory")
+    p.add_argument("--for", dest="for_model", metavar="MODEL",
+                   help="judge at this model's shapes and number format, scored vs mx.compile, a champion per "
+                        "regime (decode, prefill); e.g. qwen0.5b or an mlx-community id")
+    p.add_argument("--prompt", type=int, default=512, help="prefill regime: prompt length in tokens (with --for)")
     p.set_defaults(fn=cmd_run)
 
     p = sub.add_parser("bench", help="loop vs best-of-N on the same budget, repeated, one summary table")
@@ -436,7 +492,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("e2e", help="run a real model stock vs with carmen's changes: tok/s and same answers?")
     p.add_argument("model", nargs="?", default="mlx-community/Qwen2.5-0.5B-Instruct-4bit")
     p.add_argument("--modes", default="stock,plumbing,kernel,both")
-    p.add_argument("--kernel", default="latest", help="latest = champion of your newest residual_rmsnorm run; or golden")
+    p.add_argument("--kernel", default="latest", help="latest = champions of your newest `run residual_rmsnorm --for` run (one per regime), else of your newest residual_rmsnorm run; or golden")
     p.add_argument("--prompt", type=int, default=512)
     p.add_argument("--gen", type=int, default=128)
     p.add_argument("--repeats", type=int, default=3)

@@ -205,19 +205,27 @@ def parse(data: dict) -> tuple[Kernel, list[str]]:
 
 
 def prompt(op, *, chip: str, peak: float | None, playbook: str, champion: dict | None,
-           last: dict | None, variant: int, k: int, history: str = "") -> str:
+           last: dict | None, variant: int, k: int, history: str = "", target: str = "") -> str:
     parts = [f"TASK: write a Metal kernel for `{op.name}` ({op.summary}).\n\n{op.contract}"]
     parts.append(f"CHIP: {chip}. Measured peak memory bandwidth: {peak:.0f} GB/s." if peak else f"CHIP: {chip}.")
+    if target:
+        parts.append("TARGET: " + target)
     if playbook:
         parts.append("PLAYBOOK (lessons verified by the judge in earlier rounds; apply the ones that fit):\n" + playbook)
     if champion:
         parts.append("CURRENT BEST VERIFIED KERNEL:\n```metal\n" + champion["kernel"]["source"] + "\n```\n"
                      f"header:\n```metal\n{champion['kernel']['header']}\n```\n"
                      "Judge feedback on it:\n" + champion["feedback"])
-        parts.append("Your score is the geomean speedup over EVERY shape and dtype in the table above. Speeding up "
-                     "one shape while slowing the others lowers the score, and the kernel is thrown away. Make ONE "
-                     "structural change you expect to raise the geomean without making any shape slower, keep it "
-                     "correct, and say in `plan` which bottleneck you are attacking and which shapes should gain.")
+        if target:
+            parts.append("Your score is the geomean speedup vs mx.compile over the target's regimes above. Each regime "
+                         "keeps its own best config, so a config that only helps one regime still counts. Make ONE "
+                         "structural change you expect to raise the score, keep it correct, and say in `plan` which "
+                         "bottleneck you are attacking and which regime should gain.")
+        else:
+            parts.append("Your score is the geomean speedup over EVERY shape and dtype in the table above. Speeding up "
+                         "one shape while slowing the others lowers the score, and the kernel is thrown away. Make ONE "
+                         "structural change you expect to raise the geomean without making any shape slower, keep it "
+                         "correct, and say in `plan` which bottleneck you are attacking and which shapes should gain.")
     elif last:
         parts.append("PREVIOUS ATTEMPT (rejected):\n```metal\n" + last["kernel"]["source"] + "\n```\n"
                      "Judge feedback:\n" + last["feedback"] + "\n\nFix the problem the judge located.")

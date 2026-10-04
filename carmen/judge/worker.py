@@ -198,6 +198,10 @@ def evaluate(req: dict, adapter) -> dict:
 
     res["stage"] = "timing"
     peak = req.get("peak_gbps")
+    if req.get("target"):
+        _timing_target(adapter, op, built, passing, req["target"], peak, res)
+        return _hidden(adapter, op, built, req, peak, res, sorted({json.dumps(r["config"], sort_keys=True)
+                                                                   for r in res["regimes"].values()}))
     shapes = [tuple(s) for s in req.get("timing_shapes") or op.timing_shapes]
     dtypes = req.get("timing_dtypes", ["float32", "float16"])
     best = None
@@ -221,17 +225,48 @@ def evaluate(req: dict, adapter) -> dict:
     # (or the kernel skipped work): never report it as a speedup without a flag.
     res["suspect_timing"] = any(p > 1.05 for p in pcts)
 
+    res["score"] = res["speedup_geomean"]
+    return _hidden(adapter, op, built, req, peak, res, [json.dumps(best[0], sort_keys=True)])
+
+
+def _hidden(adapter, op, built, req, peak, res, configs: list[str]) -> dict:
+    """Secret correctness draw on every config that will be used, then timing at unseen sizes."""
     if req.get("hidden"):
         res["stage"] = "hidden"
         hidden = [Prepared(op, adapter, Case.from_json(c)) for c in req["hidden"]]
-        hf = _correctness(adapter, op, built, best[0], hidden, shrink=False)
+        cfgs = [json.loads(c) for c in configs]
+        hf = [f for cfg in cfgs for f in _correctness(adapter, op, built, cfg, hidden, shrink=False)]
         n_valid = sum(p.valid for p in hidden)
         res["hidden"] = {"total": n_valid, "failed": len({f["case"] for f in hf}), "failures": hf}
-        ht = _timing(adapter, op, built, best[0], [tuple(s) for s in req["hidden_timing_shapes"]], ["float32"], peak)
+        ht = _timing(adapter, op, built, cfgs[0], [tuple(s) for s in req["hidden_timing_shapes"]], ["float32"], peak)
         res["hidden"]["timing"] = ht
         res["hidden"]["speedup_geomean"] = stats.geomean([r["speedup"] for r in ht])
     res["stage"] = "done"
     return res
+
+
+def _timing_target(adapter, op, built, passing, target, peak, res) -> None:
+    """Time every passing config at each regime of the target, in the target's dtype, against
+    stock and mx.compile(stock). Each regime keeps its own best config: decode and prefill
+    can want different kernels. The score is declared up front: speedup vs mx.compile."""
+    regimes = {}
+    for name, shape in target["regimes"].items():
+        best = None
+        for cfg in passing:
+            row = _timing(adapter, op, built, cfg, [tuple(shape)], [target["dtype"]], peak, compiled=True)[0]
+            if best is None or row["speedup_compiled"] > best["speedup_compiled"]:
+                best = {"regime": name, "config": cfg, **row}
+        regimes[name] = best
+    res["regimes"] = regimes
+    res["timing"] = list(regimes.values())
+    res["score"] = stats.geomean([r["speedup_compiled"] for r in regimes.values()])
+    res["speedup_geomean"] = stats.geomean([r["speedup"] for r in regimes.values()])
+    res["speedup_compiled_geomean"] = res["score"]
+    res["best_config"] = next(iter(regimes.values()))["config"]
+    res["default_config_speedup"] = None
+    pcts = [r["pct_peak"] for r in regimes.values() if r["pct_peak"] is not None]
+    res["pct_peak_min"] = min(pcts) if pcts else None
+    res["suspect_timing"] = any(p > 1.05 for p in pcts)
 
 
 def _trim(text: str, lines: int = 25) -> str:

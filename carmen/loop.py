@@ -25,6 +25,7 @@ from . import carmy, judge, ops
 from .backends import Kernel
 from .events import Run
 from .memory import Playbook
+from .target import Target
 from .ops.base import Case, fuzz_cases
 
 PEAK_TARGET = 0.90
@@ -52,9 +53,13 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         memory_dir: Path = Path("memory"), patience: int = 2, adapter=None,
         write_fn: Callable | None = None, reflect_fn: Callable | None = None,
         peak: dict | None = None, on_event: Callable[[str, dict], None] | None = None,
-        start: dict | None = None, should_stop: Callable[[], bool] | None = None) -> dict:
+        start: dict | None = None, should_stop: Callable[[], bool] | None = None,
+        target: dict | None = None) -> dict:
     """`start` seeds the loop with an existing kernel ({id, kernel, verdict, feedback}): a verified
-    one becomes the champion to improve, a failing one becomes the attempt to repair."""
+    one becomes the champion to improve, a failing one becomes the attempt to repair.
+
+    `target` (carmen.target.Target.to_json()) fixes the score before the run: the model's dtype,
+    one shape per regime, scored vs mx.compile. Each regime then keeps its own champion."""
     op = ops.get(op_name)
     write_fn = write_fn or carmy.write
     reflect_fn = reflect_fn or carmy.reflect
@@ -71,8 +76,10 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         emit(t, d)
 
     log("run_started", op=op.name, mode=mode, model=model, effort=effort, rounds=rounds, k=k,
-        chip=chip, peak_gbps=peak_gbps, backend=backend, run_dir=str(rr.dir))
+        chip=chip, peak_gbps=peak_gbps, backend=backend, run_dir=str(rr.dir), target=target)
     champion, last_fail, stale, attempts = None, None, 0, []
+    regime_best: dict[str, dict] = {}
+    target_text = Target.from_json(target).describe() if target else ""
     if start is not None:
         if start["verdict"].get("correct"):
             champion = start
@@ -93,7 +100,8 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
         def one(i):
             return write_fn(op, model=model, effort=effort, chip=chip, peak=peak_gbps, playbook=pb_text,
                             champion=champion if learn else None, last=last_fail if learn else None,
-                            variant=i, k=k, history=_ledger(attempts, champion) if learn else "")
+                            variant=i, k=k, history=_ledger(attempts, champion) if learn else "",
+                            target=target_text)
 
         with ThreadPoolExecutor(max_workers=k) as pool:
             futures = [pool.submit(one, i) for i in range(k)]
@@ -121,16 +129,22 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
             log("attempt_submitted", round=r, attempt=aid, digest=kernel.digest(), plan=kernel.plan,
                 configs=kernel.configs, lessons_used=used, usage=usage)
             v = judge.judge(op.name, kernel, adapter=adapter, backend=backend, round_seed=round_seed,
-                            hidden_seed=hidden_seed, corpus=corpus, peak=peak_gbps)
+                            hidden_seed=hidden_seed, corpus=corpus, peak=peak_gbps, target=target)
             fb = judge.feedback(v)
             rr.save(f"attempts/{aid}/verdict.json", v)
             rr.save(f"attempts/{aid}/feedback.txt", fb)
             log("judge_result", round=r, attempt=aid, stage=v["stage"], correct=v["correct"],
                 naive_pass=v.get("naive_pass"), speedup=v.get("speedup_geomean"),
-                speedup_compiled=v.get("speedup_compiled_geomean"),
+                speedup_compiled=v.get("speedup_compiled_geomean"), score=v.get("score"),
                 pct_peak_min=v.get("pct_peak_min"), hidden=_hidden_summary(v))
             if learn:
                 playbook.credit([l.id for l in shown], used, bool(v["correct"]), op.name)
+            for name, reg in (v.get("regimes") or {}).items() if v["correct"] else ():
+                if name not in regime_best or reg["speedup_compiled"] > regime_best[name]["speedup_compiled"]:
+                    regime_best[name] = {"attempt": aid, "config": reg["config"], "shape": reg["shape"],
+                                         "dtype": reg["dtype"], "speedup": reg["speedup"],
+                                         "speedup_compiled": reg["speedup_compiled"]}
+                    log("regime_champion", round=r, regime=name, **regime_best[name])
             entry = {"id": aid, "kernel": kernel.to_json(), "verdict": v, "feedback": fb}
             round_attempts.append(entry)
             attempts.append(entry)
@@ -145,12 +159,11 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
                 log("corpus_grew", round=r, added=[c.label() for c in new])
 
         improved = False
-        for a in sorted((a for a in round_attempts if a["verdict"]["correct"]),
-                        key=lambda a: -a["verdict"]["speedup_geomean"]):
-            if champion is None or a["verdict"]["speedup_geomean"] > champion["verdict"]["speedup_geomean"] * MIN_GAIN:
+        for a in sorted((a for a in round_attempts if a["verdict"]["correct"]), key=lambda a: -_score(a["verdict"])):
+            if champion is None or _score(a["verdict"]) > _score(champion["verdict"]) * MIN_GAIN:
                 champion, improved = a, True
                 log("champion", round=r, attempt=a["id"], speedup=a["verdict"]["speedup_geomean"],
-                    pct_peak_min=a["verdict"].get("pct_peak_min"))
+                    score=_score(a["verdict"]), pct_peak_min=a["verdict"].get("pct_peak_min"))
             break
         if champion is None and round_attempts:
             # Repair from the attempt that got furthest: correctness failures beat compile errors,
@@ -185,7 +198,7 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
             log("stopped", reason=f"no improvement for {patience} rounds")
             break
 
-    summary = summarize(attempts, champion)
+    summary = summarize(attempts, champion, regime_best, target)
     summary["run_dir"] = str(rr.dir)
     rr.save("summary.json", summary)
     log("run_finished", **{k_: v_ for k_, v_ in summary.items() if k_ != "run_dir"})
@@ -195,7 +208,14 @@ def run(op_name: str, *, rounds: int = 6, k: int = 3, mode: str = "loop", model:
 LEDGER_MAX = 12
 
 
+def _score(v: dict) -> float:
+    """What the run optimizes: the target's declared score if there is one, else the geomean vs stock."""
+    return v.get("score") or v["speedup_geomean"]
+
+
 def _scores(v: dict) -> str:
+    if v.get("regimes"):
+        return ", ".join(f"{r['regime']} {r['speedup_compiled']:.2f}x vs compile" for r in v["regimes"].values())
     return ", ".join(f"{'x'.join(map(str, r['shape']))} {r['dtype'].replace('float', 'f')} {r['speedup']:.2f}x"
                      for r in v.get("timing", []))
 
@@ -208,7 +228,7 @@ def _ledger(attempts: list[dict], champion: dict | None) -> str:
         plan = " ".join((a["kernel"].get("plan") or "").split())[:240]
         if v["correct"]:
             tag = " (current champion)" if champion and a["id"] == champion["id"] else ""
-            res = f"verified, geomean {v['speedup_geomean']:.2f}x{tag}: {_scores(v)}"
+            res = f"verified, score {_score(v):.2f}x{tag}: {_scores(v)}"
         else:
             first = next((c["failures"][0] for c in v.get("configs", []) if c["failures"]), None)
             why = "; ".join(first["patterns"]) if first else ((v.get("error") or "").splitlines() or [""])[0]
@@ -237,7 +257,8 @@ def _round_summary(attempts: list[dict], champion: dict | None) -> str:
     return "\n".join(lines)
 
 
-def summarize(attempts: list[dict], champion: dict | None) -> dict:
+def summarize(attempts: list[dict], champion: dict | None, regime_best: dict | None = None,
+              target: dict | None = None) -> dict:
     """The numbers carmen reports. Hidden results appear here, never in Carmy's prompts."""
     compiled = [a for a in attempts if a["verdict"]["stage"] not in ("static", "compile", "crash", "timeout")]
     correct = [a for a in attempts if a["verdict"]["correct"]]
@@ -260,6 +281,8 @@ def summarize(attempts: list[dict], champion: dict | None) -> dict:
         out.update(speedup=v["speedup_geomean"], speedup_compiled=v.get("speedup_compiled_geomean"),
                    pct_peak_min=v.get("pct_peak_min"),
                    best_config=v["best_config"], default_config_speedup=v.get("default_config_speedup"))
+        if target:
+            out.update(target=target, score=_score(v), regime_champions=regime_best or {})
         if v.get("hidden"):
             out.update(hidden_speedup=v["hidden"].get("speedup_geomean"),
                        hidden_failed=v["hidden"]["failed"], hidden_total=v["hidden"]["total"])
