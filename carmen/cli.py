@@ -324,12 +324,29 @@ def cmd_e2e(args) -> int:
             for r in verdict.get("timing", []):
                 print(ui.s(f"  on its own at {'x'.join(map(str, r['shape']))} {r['dtype']}: "
                            f"{r['speedup']:.2f}x vs MLX", "grey"))
+    mlp_kernels = None
+    if any("mlp" in e2e.parts(m) for m in modes):
+        mlp_kernels, ids = {}, []
+        for op in e2e.MLP_OPS:
+            if args.kernel == "golden":
+                k = broken.golden(op)
+                mlp_kernels[op], src = (k, k.configs[0]), "golden"
+            else:
+                found = e2e.latest_kernel(Path(args.runs), op)
+                if not found:
+                    print(f"{ui.BAD} no {op} champion in {args.runs}: run `carmen run {op}` or pass --kernel golden")
+                    return 2
+                mlp_kernels[op], src = (found[0], found[1]), found[2]
+            ids.append(f"{op}={src}")
+            print(f"{op}: {ui.s(src, 'bold')} {mlp_kernels[op][1]}")
+        kernel_id = ", ".join(filter(None, [kernel_id] + ids))
     if args.calls:
         return _print_calls(e2e, args, kernel, config, kernel_id)
     if "stock" not in modes:
         modes = ["stock"] + modes  # every comparison is against stock
     results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
-                      on_progress=lambda m: print(ui.s("  " + m, "grey")), champions=champions)
+                      on_progress=lambda m: print(ui.s("  " + m, "grey")), champions=champions,
+                      mlp_kernels=mlp_kernels)
     stock = results[0]
     ui.rule(f"result · median of {stock.turns} turns each, range in brackets")
     rows = []
@@ -517,7 +534,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("e2e", help="run a real model stock vs with carmen's changes: tok/s and same answers?")
     p.add_argument("model", nargs="?", default="mlx-community/Qwen2.5-0.5B-Instruct-4bit")
     p.add_argument("--modes", default="stock,plumbing,compile,kernel,all",
-                   help="comma-separated: stock, plumbing, compile, kernel, all, or parts joined with + (plumbing+compile)")
+                   help="comma-separated: stock, plumbing, compile, kernel, mlp, all, or parts joined with + (mlp+compile)")
     p.add_argument("--kernel", default="latest", help="latest = champions of your newest `run residual_rmsnorm --for` run (one per regime), else of your newest residual_rmsnorm run; or golden")
     p.add_argument("--prompt", type=int, default=512)
     p.add_argument("--gen", type=int, default=128)

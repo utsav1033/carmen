@@ -20,7 +20,8 @@ mx.fast.metal_kernel, and you care about two things in this order: exactly corre
 
 How your kernel runs:
 - You write only the kernel BODY. MLX generates the signature: each input is a pointer named after it \
-(element type T; `scale` is float), the output is `device T* out`, and each input `name` also gets \
+(element type T unless the task gives another type, e.g. uint32 for packed 4-bit weights; `scale` and `eps` are float), \
+the output is `device T* out`, and each input `name` also gets \
 `name_shape` (`const constant int*`, e.g. `x_shape`) with its shape. MLX puts small inputs in the `constant` address space and large ones in `device`, so never \
 spell out an input pointer's address space: write `auto xr = x + row * n;`.
 - T is float, half or bfloat (bfloat16: float32's range with 8 bits of precision). Unless the task says otherwise, the harness launches one threadgroup \
