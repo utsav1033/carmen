@@ -4,12 +4,47 @@
 
 <p align="center">
   <b>A self-improving harness where an LLM writes Apple Metal kernels and a judge it can't fool decides what's real.</b><br>
-  <sub>Under 4k lines of Python. Apple Metal today; a new chip is one adapter file.</sub>
+  <sub>About 6k lines of Python. Apple Metal today; a new chip is one adapter file.</sub>
 </p>
 
 <p align="center">
   <a href="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml"><img src="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
 </p>
+
+## On a real model: Qwen 2.5 0.5B (4-bit), Apple M4
+
+carmen's AI wrote two fused kernels that replace **8 MLX kernels with 2** in the part of every layer
+that runs after attention (add, norm, the 4-bit gate/up/down matmuls, silu, multiply, add), at decode.
+In all 24 layers of the real model:
+
+| | decode vs stock MLX | answers |
+|---|---|---|
+| `mx.compile` only | 1.00× [1.00–1.01] | identical |
+| **carmen's `mlp_up` + `mlp_down`, compiled** | **1.03× [1.02–1.05]** | **identical 256 tokens, identical logits** |
+
+Each of 30 turns runs every version back to back; the number is the median of each turn's ratio to the stock
+run in the same turn, with a 95% bootstrap range. Compiling alone gives nothing, so the gain is the kernels.
+`carmen e2e --modes stock,compile,mlp+compile --repeats 30 --gen 256`.
+
+Small, but every part of the loop is real: the AI wrote the kernels, the judge proved them (and caught all 21
+bugs seeded into them), and the model got faster with the same output.
+
+**What it took to get an honest number:**
+- **A kernel that wins in the judge can lose in the model.** A residual-add + rmsnorm kernel scored 1.15× in
+  the judge and made Qwen 18% *slower*. The judge timed it at the wrong shapes, against plain MLX instead of
+  `mx.compile`, and one launch at a time instead of 48 in a row. Fixed with ideas from
+  [SoL-Pi](https://arxiv.org/abs/2609.20519): `carmen run <op> --for qwen0.5b` declares the target before the
+  run (the model's shapes and dtype, scored vs `mx.compile`), keeps a champion per regime (decode, prefill),
+  and checks the champion inside the model at the end, where the AI can't see it.
+- **Better measurement killed two of our own wins.** A +40% prefill gain (merging gate and up) and a 1.09×
+  decode gain disappeared once every version took turns instead of running one after another: the first
+  version measured on a cold GPU looked slow, the rest looked fast.
+- **Background apps matter more than kernels.** With a browser and a screen recorder open, stock decode
+  swung between 84 and 157 tok/s. Closed, it held at 175–186.
+- **Small models are launch-bound, not math-bound.** Every word reads 0.28 GB of weights; at the M4's
+  measured 96 GB/s that's a limit of ~346 tok/s. Stock reaches 51%. The rest is hundreds of tiny kernel
+  launches per word. Fusing two small ops can't fix that; fusing whole blocks starts to (this result), and one kernel per
+  layer or per model would be the real fix.
 
 ## Results so far (Apple M4)
 
@@ -22,6 +57,7 @@
 | rmsnorm | 1 hand-tuned kernel | 0.99× | | |
 | matmul | 1 heavily tuned kernel (Apple's matrix units) | **0.93×** | 0.92× | 0.86× |
 | attention | 1 heavily tuned fused kernel | 0.54× | 0.51× | 0.79× |
+| **mlp_down** (4-bit, Qwen decode shape) | 2 kernels: 4-bit matmul, add | **1.02×** | **1.06×** | 1.14× |
 
 Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fresh memory). `mx.compile` is MLX's graph compiler: it merges element-wise steps but can't merge them into softmax or rmsnorm.
 
@@ -31,7 +67,7 @@ Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fre
 - **On hard kernels the model didn't make mistakes, it hit Apple's ceiling.** All 28 matmul and attention kernels that compiled were correct on visible and hidden inputs. Speed is where they fall short: 0.93× of MLX's matmul, 0.54× of its fused attention.
 - **The judge caught real mistakes, and one of ours.** Of 96 bench kernels, 2 were wrong (an infinity mismatch, unwritten output) and 1 didn't compile; all were rejected. 12 more were rejected by an over-strict rule that banned `#pragma unroll`, a harmless speed hint. That rule is fixed: the judge has to be fair, not just strict.
 
-**The judge is measured too:** 54 realistic bugs planted across softmax, add_rmsnorm, matmul, attention and residual_rmsnorm, run on an M4. A KernelBench-style check (one shape, `allclose`) passed **28 of them at 1e-2, and 14 even at the strict 1e-4**. carmen's judge caught **all 54**, and said where each one was. Two matmul bugs (wrong leading dimension, swapped tile axes) are exactly right on square matrices, so a one-shape square check can never see them.
+**The judge is measured too:** 75 realistic bugs planted across seven kernels, including two that read 4-bit quantized weights the way real models store them, run on an M4. A KernelBench-style check (one shape, `allclose`) passed **35 of them at 1e-2, and 19 even at the strict 1e-4**. carmen's judge caught **all 75**, and said where each one was. Two matmul bugs (wrong leading dimension, swapped tile axes) are exactly right on square matrices, so a one-shape square check can never see them.
 
 | kernel | seeded bugs | carmen caught | one-shape check passed (1e-2) | one-shape check passed (1e-4) |
 |---|---|---|---|---|
@@ -40,6 +76,8 @@ Fused rows are means of `carmen bench` (2 runs × 4 rounds × 3 drafts each, fre
 | matmul | 8 | **8** | 4 | 2 |
 | attention | 10 | **10** | 3 | 2 |
 | residual_rmsnorm | 13 | **13** | 6 | 2 |
+| mlp_up (4-bit) | 13 | **13** | 5 | 4 |
+| mlp_down (4-bit) | 8 | **8** | 2 | 1 |
 
 ## Where AI-written kernels fail, and how carmen catches each one
 
