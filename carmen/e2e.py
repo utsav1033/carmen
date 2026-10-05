@@ -70,10 +70,29 @@ class Result:
     prefill_hi: float | None = None
     turns: int = 1
     weight_bytes: int | None = None  # stock only: bytes every decoded word must read
+    decode_turns: list[float] | None = None  # tok/s of every turn, in turn order (turn t of every mode ran together)
+    prefill_turns: list[float] | None = None
+
+
+def paired(r: Result, stock: Result, boot: int = 2000) -> tuple[float, float, float] | None:
+    """Median of the per-turn ratios (this mode / stock in the same turn), with a 95% bootstrap range.
+    Pairing cancels what the Mac was doing during that turn (heat, other apps), which a plain
+    range comparison can't."""
+    import numpy as np
+    if not r.decode_turns or not stock.decode_turns or len(r.decode_turns) != len(stock.decode_turns):
+        return None
+    ratios = np.array(r.decode_turns) / np.array(stock.decode_turns)
+    rng = np.random.default_rng(0)
+    meds = np.median(ratios[rng.integers(0, len(ratios), (boot, len(ratios)))], axis=1)
+    return float(np.median(ratios)), float(np.percentile(meds, 2.5)), float(np.percentile(meds, 97.5))
 
 
 def beyond_noise(r: Result, stock: Result) -> str:
-    """'faster' or 'slower' only when this mode's range clears stock's; else 'within noise'."""
+    """'faster' or 'slower' only when the 95% range of the paired per-turn ratio excludes 1.0 (needs
+    per-turn data); without it, only when this mode's whole range clears stock's. Else 'within noise'."""
+    p = paired(r, stock)
+    if p is not None:
+        return "faster" if p[1] > 1 else "slower" if p[2] < 1 else "within noise"
     if None in (r.decode_lo, r.decode_hi, stock.decode_lo, stock.decode_hi):
         return "unknown"
     if r.decode_lo > stock.decode_hi:
@@ -618,7 +637,8 @@ def run(name: str, modes=MODES, kernel: Kernel | None = None, config: dict | Non
         dec = [(gen_tokens - 1) / s[1] for s in samples[mode]]
         r = Result(mode, float(np.median(pre)), float(np.median(dec)), tokens_total=gen_tokens,
                    decode_lo=min(dec), decode_hi=max(dec), prefill_lo=min(pre), prefill_hi=max(pre),
-                   turns=repeats, weight_bytes=wbytes if mode == "stock" else None)
+                   turns=repeats, weight_bytes=wbytes if mode == "stock" else None,
+                   decode_turns=dec, prefill_turns=pre)
         out_ids, logits = samples[mode][0][2], samples[mode][0][3]
         if mode == "stock":
             stock = (out_ids, logits)

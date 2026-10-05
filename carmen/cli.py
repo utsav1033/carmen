@@ -365,8 +365,10 @@ def cmd_e2e(args) -> int:
                    ui.s(f"diverge at token {r.tokens_match + 1}", "yellow"))
         noise = e2e.beyond_noise(r, stock)
         noise = ui.s(noise, {"faster": "green", "slower": "red"}.get(noise, "grey"))
+        pr = e2e.paired(r, stock)
+        vs = (ui.speed(pr[0]) + ui.s(f" [{pr[1]:.2f}-{pr[2]:.2f}]", "grey")) if pr else ui.speed(r.decode_tps / stock.decode_tps)
         rows.append([r.mode, f"{r.prefill_tps:,.0f}", ui.speed(r.prefill_tps / stock.prefill_tps), dec,
-                     ui.speed(r.decode_tps / stock.decode_tps), noise,
+                     vs, noise,
                      answers + ui.s(f"  (first logits within {r.max_logit_diff:.3g})", "grey")])
     ui.table(["mode", "prefill tok/s", "vs stock", "decode tok/s", "vs stock", "beyond noise?", "outputs vs stock"],
              rows, align="lrrrrll")
@@ -382,7 +384,8 @@ def cmd_e2e(args) -> int:
         print(f"stock reaches {stock.decode_tps / limit:.0%} of it"
               + (f", {best.mode} {best.decode_tps / limit:.0%}" if best is not stock else "")
               + ui.s(". The rest is launches, Python, and ops too small to keep the GPU busy.", "grey"))
-    print(ui.s("\nbeyond noise = this mode's slowest turn beats stock's fastest (or the reverse). fp16 rounding can "
+    print(ui.s("\ndecode vs stock = median of each turn's ratio to the stock run in the same turn, with its 95% range "
+               "(bootstrap). beyond noise = that range is entirely above 1.0 (faster) or below (slower). fp16 rounding can "
                "flip a near-tie between two words, so a late divergence with a tiny logit difference is rounding, "
                "not a bug; an early one with a large difference is a bug.", "grey"))
     print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs), extra)}", "grey"))

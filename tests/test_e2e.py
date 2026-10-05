@@ -86,3 +86,15 @@ def test_holdout_says_tie_or_unsteady_instead_of_guessing():
     assert H("decode", 1, 13.9, 17.1, 18.1, 1.02, ratio_lo=0.9, ratio_hi=1.03).verdict == "tie"
     assert H("prefill", 512, 25.7, 33.6, 59.7, 1.52, 0.5, 0.6, stock_spread=1.4).verdict == "unsteady"
     assert H("prefill", 512, 25.7, 33.6, 59.7, 1.52, 0.5, 0.6).verdict == "disagrees"
+
+
+def test_paired_turns_see_a_win_that_overlapping_ranges_hide():
+    R = e2e.Result
+    stock_turns = [150, 130, 160, 140, 155, 135, 145, 150]  # the Mac swings +-10% between turns
+    fast_turns = [t * 1.05 for t in stock_turns]  # every turn 5% faster than the stock run beside it
+    stock = R("stock", 2000, 147.5, decode_lo=130, decode_hi=160, decode_turns=stock_turns)
+    mlp = R("mlp", 2000, 154.9, decode_lo=136.5, decode_hi=168, decode_turns=fast_turns)
+    lo, hi = e2e.paired(mlp, stock)[1:]
+    assert e2e.beyond_noise(mlp, stock) == "faster" and 1.0 < lo <= hi
+    flat = R("x", 2000, 147.5, decode_lo=130, decode_hi=160, decode_turns=[150, 140, 160, 125, 160, 140, 140, 152])
+    assert e2e.beyond_noise(flat, stock) == "within noise"
