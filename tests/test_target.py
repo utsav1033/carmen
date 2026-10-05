@@ -105,3 +105,13 @@ def test_e2e_uses_each_regimes_champion(tmp_path):
         "decode": {"attempt": "0-1", "config": {"TG": 32}}, "prefill": {"attempt": "1-0", "config": {"TG": 256}}}}))
     champs, run_id, _ = e2e.latest_regime_champions(tmp_path)
     assert champs["decode"][0].source == "src 0-1" and champs["prefill"][1] == {"TG": 256}
+
+
+def test_mlp_targets_are_decode_only_at_the_models_sizes():
+    up = target.make("q", 896, "float16", op="mlp_up", mlp=4864)
+    down = target.make("q", 896, "float16", op="mlp_down", mlp=4864)
+    assert up.regimes == {"decode": [1, 4864, 896]} and down.regimes == {"decode": [1, 896, 4864]}
+    req = judge.build_request("mlp_down", Kernel("good", configs=[{"TG": 256, "BN": 8}]), round_seed=1,
+                              peak=100.0, target=down.to_json())
+    case = req["visible"][-1]
+    assert case["family"] == "target" and (case["rows"], case["n"], case["inner"]) == (1, 896, 4864)

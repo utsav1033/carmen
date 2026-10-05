@@ -24,7 +24,8 @@ ALIASES = {
 }
 
 # Ops whose rows are tokens and whose row length is the model's hidden size.
-TARGETABLE = ("rmsnorm", "add_rmsnorm", "residual_rmsnorm", "layernorm")
+TARGETABLE = ("rmsnorm", "add_rmsnorm", "residual_rmsnorm", "layernorm", "mlp_up", "mlp_down")
+DECODE_ONLY = ("mlp_up", "mlp_down")  # decode kernels: prefill stays stock
 
 METRIC = "speedup vs mx.compile(stock MLX op), geomean over regimes"
 
@@ -50,19 +51,23 @@ class Target:
                 f"{self.metric}. Shapes outside these do not count, but every input must still be correct.")
 
 
-def make(model: str, hidden: int, dtype: str, prompt_tokens: int = 512) -> Target:
+def make(model: str, hidden: int, dtype: str, prompt_tokens: int = 512, op: str = "", mlp: int = 0) -> Target:
+    if op == "mlp_up":  # (rows, n, K): output is the MLP width, K the hidden size
+        return Target(model, dtype, {"decode": [1, mlp, hidden]})
+    if op == "mlp_down":
+        return Target(model, dtype, {"decode": [1, hidden, mlp]})
     return Target(model, dtype, {"decode": [1, hidden], "prefill": [prompt_tokens, hidden]})
 
 
 def resolve(op_name: str, model: str, prompt_tokens: int = 512) -> Target:
     """Read the model's hidden size and number format (needs MLX and mlx-lm)."""
     if op_name not in TARGETABLE:
-        raise SystemExit(f"--for works with {', '.join(TARGETABLE)} so far: their rows are tokens and their "
-                         f"row length is the model's hidden size. {op_name} isn't wired to a model shape yet.")
+        raise SystemExit(f"--for works with {', '.join(TARGETABLE)} so far: their shapes come straight from "
+                         f"the model's sizes. {op_name} isn't wired to a model shape yet.")
     from . import profile
     mx, nn, load, _ = profile._imports()
     name = ALIASES.get(model, model)
     m, _ = load(name)
     spec = profile.read_spec(m, name)
     del m
-    return make(name, spec.hidden, spec.dtype, prompt_tokens)
+    return make(name, spec.hidden, spec.dtype, prompt_tokens, op_name, spec.mlp)

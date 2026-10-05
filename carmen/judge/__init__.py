@@ -75,7 +75,8 @@ def build_request(op_name: str, kernel: Kernel, *, round_seed: int | None = None
 
 
 def _target_cases(op, target: dict) -> list[Case]:
-    return [Case("normal", rows, n, target["dtype"], rows * 7 + n, "target") for rows, n in target["regimes"].values()]
+    return [Case("normal", s[0], s[1], target["dtype"], s[0] * 7 + s[1], "target", s[2] if len(s) > 2 else 0)
+            for s in target["regimes"].values()]
 
 
 def judge(op_name: str, kernel: Kernel, *, adapter=None, timeout: float = 900, **kw) -> dict:
