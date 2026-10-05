@@ -186,9 +186,13 @@ def _holdout(args, summary: dict) -> None:
     """The frozen final check, inside the real model. Carmy never saw it."""
     from . import e2e
     ui.rule("held-out check: inside the model")
+    if args.op in e2e.MLP_OPS:
+        print(ui.s(f"{args.op} runs inside the model together with its partner kernel. Check it with: "
+                   f"carmen e2e {summary['target']['model']} --modes stock,mlp,mlp+compile", "grey"))
+        return
     if args.op != e2e.OP:
-        print(ui.s(f"only {e2e.OP} is wired into a model so far; {args.op}'s champions are judged, not model-checked.",
-                   "grey"))
+        print(ui.s(f"only {e2e.OP} and the mlp kernels are wired into a model so far; {args.op}'s champions are "
+                   "judged, not model-checked.", "grey"))
         return
     run_dir = Path(summary["run_dir"])
     champs = {}
