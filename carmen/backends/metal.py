@@ -12,7 +12,7 @@ from .base import PAD, Kernel
 try:
     import mlx.core as mx
 except ImportError as e:  # pragma: no cover - only on machines without MLX
-    raise ImportError("the metal backend needs MLX on Apple Silicon: pip install 'carmen[metal]'") from e
+    raise ImportError("the metal backend needs MLX on Apple Silicon: pip install 'carmen-kernels[metal]'") from e
 
 _DTYPES = {"float32": mx.float32, "float16": mx.float16, "bfloat16": mx.bfloat16}
 

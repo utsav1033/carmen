@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="carmen: let the model cook. trust nothing it can't prove." width="100%">
+  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/banner.svg" alt="carmen: let the model cook. trust nothing it can't prove." width="100%">
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ of Qwen 2.5 0.5B. Decode got **3% faster, with identical output.**
 | matmul · attention (MLX: heavily tuned) | 0.93× · 0.54× | |
 
 **The judge caught all 75 bugs planted in seven kernels.** A KernelBench-style check let 35 of them through.
-[How the judge works →](docs/judge.md)
+[How the judge works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
 
 ## What I learned
 
@@ -59,7 +59,7 @@ of Qwen 2.5 0.5B. Decode got **3% faster, with identical output.**
 - **Small models on a Mac are launch-bound.** Qwen 0.5B reads 0.28 GB of weights per word, so the M4 could do ~346 tok/s.
   Stock MLX reaches 51%. The rest is hundreds of tiny kernel launches per word. Bigger fused kernels are the way forward.
 
-New to kernels? [How it all works](docs/how-it-works.md) explains LLMs, GPUs and kernels from scratch.
+New to kernels? [How it all works](https://github.com/utsav1033/carmen/blob/main/docs/how-it-works.md) explains LLMs, GPUs and kernels from scratch.
 
 ## How it works
 
@@ -80,14 +80,14 @@ flowchart LR
     J -.->|"hidden results<br/>(never shown to Carmy)"| R["report"]
 ```
 
-<p align="center"><img src="assets/cook.webp" alt="a cook in progress: three drafts, the judge's verdicts, the champion" width="90%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/cook.webp" alt="a cook in progress: three drafts, the judge's verdicts, the champion" width="90%"></p>
 
 ## Try it
 
 On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "carmen[metal] @ git+https://github.com/utsav1033/carmen"
+uv tool install "carmen-kernels[metal,models]"   # or: pip install "carmen-kernels[metal,models]"
 export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
 carmen                              # the app
 carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, on your Mac (no API key)
@@ -100,11 +100,11 @@ carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, 
 | `carmen run <op> [--for qwen0.5b]` | let Carmy cook one kernel; `--for` judges it at a real model's shapes |
 | `carmen broken <op>` | plant bugs and check the judge catches every one, next to a KernelBench-style check |
 | `carmen judge <op> <file>` | judge a kernel you wrote |
-| `carmen e2e [model]` | run a real model stock vs with carmen's kernels: tok/s, noise range, same answers? (`pip install 'carmen[models]'`) |
+| `carmen e2e [model]` | run a real model stock vs with carmen's kernels: tok/s, noise range, same answers? (`pip install 'carmen-kernels[models]'`) |
 | `carmen profile [model]` | where a model spends its time, step by step |
 | `carmen bench` | the feedback loop vs plain best-of-N, same budget |
 
-From source: `git clone`, then `pip install -e '.[metal,models,dev]'`, and put your key in `.env` (see `.env.example`).
+From source: `git clone https://github.com/utsav1033/carmen`, then `pip install -e '.[metal,models,dev]'`, and put your key in `.env` (see `.env.example`).
 
 ## Built on the shoulders of
 
