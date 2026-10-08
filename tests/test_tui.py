@@ -25,8 +25,17 @@ def test_app_opens_on_home_with_every_op(tmp_path):
             await pilot.pause()
             assert isinstance(app.screen, HomeScreen)
             from carmen import ops
-            assert app.screen.query_one("#ops").option_count == len(ops.OPS) + len(ops.WIP)
-            assert "softmax" in str(app.screen.query_one("#about").render())
+            ol = app.screen.query_one("#ops")
+            ids = [ol.get_option_at_index(i).id for i in range(ol.option_count)]
+            assert set(i for i in ids if i) == set(ops.OPS) | {f"wip:{w['name']}" for w in ops.WIP}
+            from rich.console import Console
+            from carmen.tui import proven_text
+            c = Console(width=160, record=True)
+            c.print(proven_text())
+            text = c.export_text()
+            assert "1.03×" in text and "75/75" in text
+            assert app.screen.query_one("#models").option_count >= 1
+            assert "mlp_up" in str(app.screen.query_one("#about").render())
     asyncio.run(go())
 
 

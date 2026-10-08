@@ -112,7 +112,7 @@ carmen/
   loop.py       draft → verify → improve → stop at the roofline
   memory.py     the playbook: verdict-credited lessons, chip vs op
   broken.py     seeded bugs for measuring the judge
-kernels/golden/ hand-checked reference kernels (the judge's positive control)
+carmen/golden/  hand-checked reference kernels (the judge's positive control)
 tests/          the judge's logic, tested on a numpy stand-in for the GPU
 ```
 

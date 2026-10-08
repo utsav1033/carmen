@@ -1,0 +1,11 @@
+{
+  "note": "Results measured on an Apple M4 and published in the README. The app shows them until you have your own.",
+  "judge": {"planted": 75, "caught": 75, "naive_passed": 35, "kernels": 7},
+  "kernels": {
+    "masked_softmax": {"vs_mlx": 1.82, "vs_compile": 1.38},
+    "add_rmsnorm": {"vs_mlx": 1.41, "vs_compile": 1.43},
+    "mlp_down": {"vs_mlx": 1.02, "vs_compile": 1.06},
+    "matmul": {"vs_mlx": 0.93, "vs_compile": 0.92},
+    "attention": {"vs_mlx": 0.54, "vs_compile": 0.51}
+  }
+}

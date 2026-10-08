@@ -98,3 +98,54 @@ def test_paired_turns_see_a_win_that_overlapping_ranges_hide():
     assert e2e.beyond_noise(mlp, stock) == "faster" and 1.0 < lo <= hi
     flat = R("x", 2000, 147.5, decode_lo=130, decode_hi=160, decode_turns=[150, 140, 160, 125, 160, 140, 140, 152])
     assert e2e.beyond_noise(flat, stock) == "within noise"
+
+
+def test_bundled_champions_load_and_pass_static_checks():
+    from carmen import champions, ops
+    from carmen.backends import static_check
+    assert champions.available() == ["qwen2.5-0.5b-4bit"]
+    ks = champions.kernels("qwen2.5-0.5b-4bit")
+    assert set(ks) == {"mlp_up", "mlp_down"}
+    for op, (k, cfg, origin) in ks.items():
+        assert static_check(k) is None and ops.get(op).check_config(cfg) is None and cfg in k.configs and origin
+    assert champions.for_model("mlx-community/Qwen2.5-0.5B-Instruct-4bit") == "qwen2.5-0.5b-4bit"
+
+
+def test_speedup_runs_stock_compile_and_the_bundled_kernels(tmp_path, monkeypatch, capsys):
+    from carmen import judge
+    got = {}
+    R = e2e.Result
+
+    def fake_run(name, modes, *a, mlp_kernels=None, **k):
+        got.update(name=name, modes=modes, mlp=mlp_kernels, repeats=a[4] if len(a) > 4 else None)
+        return [R("stock", 2000, 150.0, tokens_total=256, decode_lo=149, decode_hi=151, turns=30,
+                  decode_turns=[150.0] * 30),
+                R("mlp+compile", 2000, 155.0, 256, 256, 0.0, True, decode_lo=154, decode_hi=156, turns=30,
+                  decode_turns=[155.0] * 30)]
+    monkeypatch.setattr(e2e, "run", fake_run)
+    monkeypatch.setattr(judge, "peak_gbps", lambda backend: {"chip": "M4", "peak_gbps": 96.0})
+    assert cli.main(["speedup", "--runs", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert got["name"] == "mlx-community/Qwen2.5-0.5B-Instruct-4bit"
+    assert got["modes"] == ["stock", "compile", "mlp+compile"] and set(got["mlp"]) == {"mlp_up", "mlp_down"}
+    assert "published: 1.03x" in out and "faster" in out
+
+
+def test_offline_retry_only_on_network_errors(monkeypatch):
+    import os
+    from carmen.profile import offline_retry
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    calls = []
+
+    def flaky(name):
+        calls.append(os.environ.get("HF_HUB_OFFLINE"))
+        if len(calls) == 1:
+            raise RuntimeError("Server disconnected without sending a response.")
+        return "model"
+    assert offline_retry(flaky)("m") == "model" and calls == [None, "1"]
+    import pytest
+
+    def broken(name):
+        raise ValueError("bad config")
+    with pytest.raises(ValueError):
+        offline_retry(broken)("m")

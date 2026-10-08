@@ -90,11 +90,13 @@ On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
 uv tool install "carmen[metal] @ git+https://github.com/utsav1033/carmen"
 export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
 carmen                              # the app
+carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, on your Mac (no API key)
 ```
 
 | command | what it does |
 |---|---|
-| `carmen` | the terminal app: pick a kernel, watch it cook, inspect every verdict |
+| `carmen` | the terminal app: what's proven, speed up a model, pick a kernel, watch it cook |
+| `carmen speedup [model]` | stock MLX vs `mx.compile` vs carmen's bundled kernels on a real model, paired runs; no API key (`--quick` for ~2 min) |
 | `carmen run <op> [--for qwen0.5b]` | let Carmy cook one kernel; `--for` judges it at a real model's shapes |
 | `carmen broken <op>` | plant bugs and check the judge catches every one, next to a KernelBench-style check |
 | `carmen judge <op> <file>` | judge a kernel you wrote |
