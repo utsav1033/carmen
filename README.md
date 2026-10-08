@@ -84,13 +84,13 @@ flowchart LR
 
 ## Try it
 
-On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
+On an Apple Silicon Mac:
 
 ```bash
 pip install carmen-kernels          # or: uv tool install carmen-kernels
-export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
 carmen                              # the app
 carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, on your Mac (no API key)
+carmen key                          # only to cook new kernels: paste an Anthropic key once, saved for you only
 ```
 
 | command | what it does |
@@ -104,7 +104,7 @@ carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, 
 | `carmen profile [model]` | where a model spends its time, step by step |
 | `carmen bench` | the feedback loop vs plain best-of-N, same budget |
 
-From source: `git clone https://github.com/utsav1033/carmen`, then `pip install -e '.[metal,models,dev]'`, and put your key in `.env` (see `.env.example`).
+From source: `git clone https://github.com/utsav1033/carmen`, then `pip install -e '.[dev]'`. Keys go in `carmen key`, a `.env` in the folder you run from, or your shell; the shell wins.
 
 ## Built on the shoulders of
 

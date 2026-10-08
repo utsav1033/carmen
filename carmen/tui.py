@@ -26,9 +26,9 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import Footer, OptionList, RichLog, Static
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Footer, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
 from . import broken, carmy, judge, loop, ops
@@ -233,6 +233,9 @@ OptionList:focus > .option-list--option-highlighted {{ background: #26262b; colo
 HomeScreen #ops {{ width: 3fr; height: 100%; max-height: 100%; margin: 0; padding: 0 1; }}
 #about {{ width: 2fr; height: 100%; margin-left: 1; padding: 0 2; }}
 #speedres {{ margin: 1 2 0 2; height: auto; padding: 1 2; }}
+KeyScreen {{ align: center middle; background: rgba(0,0,0,0.6); }}
+#keybox {{ width: 84; height: auto; padding: 1 2; }}
+#keyin {{ margin-top: 1; background: {BG}; border: round {EDGE_HI}; }}
 .crumb {{ height: 1; margin: 0 2; }}
 #judgelog {{ height: 1fr; margin: 1 2 0 2; }}
 #rail {{ height: 3; padding: 1 2 0 2; }}
@@ -453,7 +456,10 @@ class HomeScreen(Screen):
         if option_id.startswith("model:"):
             self.app.push_screen(SpeedupScreen(option_id[6:]))
         elif self._cookable(option_id):
-            self.app.push_screen(KitchenScreen(option_id))
+            if carmy.has_key():
+                self.app.push_screen(KitchenScreen(option_id))
+            else:  # cooking calls Carmy: ask for the key once, then go
+                self.app.push_screen(KeyScreen(), lambda ok: ok and self.app.push_screen(KitchenScreen(option_id)))
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self._open(event.option.id)
@@ -480,6 +486,37 @@ class HomeScreen(Screen):
 
     def action_history(self) -> None:
         self.app.push_screen(HistoryScreen())
+
+
+# ── api key ──────────────────────────────────────────────────────────────────────
+class KeyScreen(ModalScreen[bool]):
+    """Ask for the Anthropic key once and save it where `carmen key` does (readable only by you)."""
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="keybox", classes="pane"):
+            yield Static(Text.assemble(
+                ("Cooking a kernel asks Carmy, so it needs an Anthropic API key.\n", INK),
+                ("Get one at console.anthropic.com → API keys. It's saved on this Mac only, readable only by you.\n",
+                 DIM), ("Watching speedups and the judge never needs a key.", DIM)))
+            yield Input(placeholder="paste your key, then enter", password=True, id="keyin")
+
+    def on_mount(self) -> None:
+        self.query_one("#keybox").border_title = "api key"
+        self.query_one("#keyin", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        from . import dotenv
+        key = event.value.strip()
+        if not key:
+            self.notify("nothing pasted", severity="warning")
+            return
+        dotenv.save("ANTHROPIC_API_KEY", key)
+        self.notify(f"key {dotenv.masked(key)} saved")
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 # ── speed up a model ─────────────────────────────────────────────────────────────
@@ -793,7 +830,7 @@ class KitchenScreen(Screen):
                           should_stop=lambda: self.stop_requested)
             app.call_from_thread(self.on_loop_done, sm, None)
         except carmy.CarmyAuthError as e:
-            app.call_from_thread(self.on_loop_done, None, f"{e}. Check ANTHROPIC_API_KEY in .env.")
+            app.call_from_thread(self.on_loop_done, None, f"{e}. Run `carmen key` in a terminal to replace it.")
         except Exception as e:
             app.call_from_thread(self.on_loop_done, None, f"{type(e).__name__}: {e}")
 

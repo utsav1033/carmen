@@ -65,6 +65,7 @@ def test_holdout_flags_a_judge_the_model_disagrees_with():
 
 
 def test_run_for_model_prints_regimes_and_the_in_model_check(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(target, "resolve", lambda op, model, prompt: TGT)
     monkeypatch.setattr(judge, "peak_gbps", lambda backend: PEAK)
     run_dir = tmp_path / "runs" / "20261004-000000"

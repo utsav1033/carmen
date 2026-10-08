@@ -149,3 +149,27 @@ def test_offline_retry_only_on_network_errors(monkeypatch):
         raise ValueError("bad config")
     with pytest.raises(ValueError):
         offline_retry(broken)("m")
+
+
+def test_carmen_key_saves_shows_and_removes(tmp_path, monkeypatch, capsys):
+    import io
+    import sys
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # recorded, so whatever the test saves is undone after
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-ant-abcdefgh12345678\n"))
+    assert cli.main(["key"]) == 0
+    f = tmp_path / "carmen" / ".env"
+    assert f.read_text().strip() == "ANTHROPIC_API_KEY=sk-ant-abcdefgh12345678"
+    out = capsys.readouterr().out
+    assert "…5678" in out and "sk-ant-abcdefgh" not in out  # never printed in full
+    assert cli.main(["key", "--remove"]) == 0 and "ANTHROPIC_API_KEY" not in f.read_text()
+
+
+def test_cooking_without_a_key_says_how_to_add_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # recorded, so whatever the test saves is undone after
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["run", "softmax"]) == 2
+    assert "carmen key" in capsys.readouterr().out

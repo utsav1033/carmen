@@ -132,6 +132,14 @@ def via_proxy() -> bool:
     return bool(base) and "api.anthropic.com" not in base
 
 
+NO_KEY = ("no Anthropic API key yet. Run `carmen key` and paste one (from console.anthropic.com). "
+          "Only cooking new kernels needs it; `carmen speedup` and `carmen broken` don't.")
+
+
+def has_key() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
 def _client():
     """Reads ANTHROPIC_API_KEY and, for a proxy, ANTHROPIC_BASE_URL from the environment (or .env)."""
     import anthropic

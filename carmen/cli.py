@@ -121,8 +121,42 @@ def _naive(passed) -> str:
     return ui.s("passes", "yellow") if passed else ui.s("fails", "grey")
 
 
+def cmd_key(args) -> int:
+    """Save, show or remove the Anthropic API key, in a per-user file only you can read."""
+    import getpass
+    import os
+    path = dotenv.user_env()
+    if args.remove:
+        print(f"{ui.OK} removed from {path}" if dotenv.remove("ANTHROPIC_API_KEY") else f"no key saved in {path}")
+        return 0
+    if args.show:
+        v = os.environ.get("ANTHROPIC_API_KEY")
+        print(f"{ui.OK} key {dotenv.masked(v)}" if v else f"{ui.BAD} no key. Run `carmen key` to add one.")
+        print(ui.s(f"saved keys live in {path} (readable only by you); a shell export or ./.env overrides it", "grey"))
+        return 0
+    print("Paste your Anthropic API key (from console.anthropic.com → API keys). It won't be shown.")
+    key = (getpass.getpass("key: ") if sys.stdin.isatty() else sys.stdin.readline()).strip()
+    if not key:
+        print(f"{ui.BAD} nothing pasted; no change")
+        return 2
+    saved = dotenv.save("ANTHROPIC_API_KEY", key)
+    print(f"{ui.OK} saved key {dotenv.masked(key)} to {saved} (readable only by you)")
+    print(ui.s("carmen uses it from any folder now. `carmen key --remove` deletes it.", "grey"))
+    return 0
+
+
+def _need_key() -> bool:
+    from .carmy import NO_KEY, has_key
+    if has_key():
+        return True
+    print(f"{ui.BAD} {NO_KEY}")
+    return False
+
+
 def cmd_run(args) -> int:
     from . import loop
+    if not _need_key():
+        return 2
     ui.banner(f"cooking · {args.op} · {args.mode}")
     peak = judge.peak_gbps(args.backend)
     from .carmy import CarmyAuthError
@@ -169,7 +203,8 @@ def cmd_run(args) -> int:
                            target=tgt.to_json() if tgt else None)
     except CarmyAuthError as e:
         print(f"\n{ui.BAD} {e}")
-        print(ui.s("Check ANTHROPIC_API_KEY (and ANTHROPIC_BASE_URL if you use a proxy) in .env, and that no old key is exported in your shell.", "grey"))
+        print(ui.s("Run `carmen key` to replace it (or check ANTHROPIC_BASE_URL if you use a proxy), and that no old key "
+                   "is exported in your shell.", "grey"))
         return 2
     ui.rule("result")
     _print_summary(summary)
@@ -240,6 +275,8 @@ def _print_summary(sm: dict) -> None:
 def cmd_bench(args) -> int:
     from . import bench, loop
     from .carmy import CarmyAuthError
+    if not _need_key():
+        return 2
     args.ops = args.ops or ["masked_softmax", "add_rmsnorm"]
     unknown = [o for o in args.ops if o not in ops.OPS]
     if unknown:
@@ -576,6 +613,11 @@ def main(argv=None) -> int:
     p.add_argument("--calls", action="store_true", help="time one kernel call several ways instead (where the time goes)")
     p.set_defaults(fn=cmd_e2e)
 
+    p = sub.add_parser("key", help="save your Anthropic API key (needed only to cook new kernels)")
+    p.add_argument("--show", action="store_true", help="say whether a key is set (masked)")
+    p.add_argument("--remove", action="store_true", help="delete the saved key")
+    p.set_defaults(fn=cmd_key)
+
     p = sub.add_parser("speedup", help="make a real model faster with the kernels carmen already wrote (no API key)")
     p.add_argument("model", nargs="?", default="qwen0.5b", help="qwen0.5b, llama1b, qwen3b, or an mlx-community id")
     p.add_argument("--quick", action="store_true", help="10 turns of 128 tokens instead of 30 of 256 (~2 min, rougher)")
@@ -598,6 +640,7 @@ def main(argv=None) -> int:
 
     args = ap.parse_args(argv)
     dotenv.load(args.env)
+    dotenv.load(dotenv.user_env())
     if args.cmd is None:
         args = ap.parse_args(["--backend", args.backend, "--env", args.env, "ui"])
     return args.fn(args)

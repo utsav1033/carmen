@@ -53,3 +53,28 @@ def test_wip_rows_do_not_start_a_cook(tmp_path):
             await pilot.pause()
             assert isinstance(app.screen, HomeScreen)
     asyncio.run(go())
+
+
+def test_cooking_without_a_key_asks_for_one_and_saves_it_privately(tmp_path, monkeypatch):
+    import os
+    from carmen.tui import KeyScreen, KitchenScreen
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")  # recorded, so whatever the test saves is undone after
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setattr(KitchenScreen, "cook", lambda self: None)  # no Carmy calls in tests
+
+    async def go():
+        app = Carmen(runs_dir=tmp_path / "runs", memory_dir=tmp_path / "mem")
+        async with app.run_test(size=(180, 50)) as pilot:
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, KeyScreen)
+            app.screen.query_one("#keyin").value = "sk-ant-test-1234567890"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, KitchenScreen)
+    asyncio.run(go())
+    f = tmp_path / "cfg" / "carmen" / ".env"
+    assert "ANTHROPIC_API_KEY=sk-ant-test-1234567890" in f.read_text() and oct(f.stat().st_mode & 0o777) == "0o600"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-test-1234567890"
