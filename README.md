@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml"><img src="https://github.com/utsav1033/kernel-sahab/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+  <a href="https://github.com/utsav1033/carmen/actions/workflows/tests.yml"><img src="https://github.com/utsav1033/carmen/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
 </p>
 
 ## Why
@@ -87,7 +87,7 @@ flowchart LR
 On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "carmen[metal] @ git+https://github.com/utsav1033/kernel-sahab"
+uv tool install "carmen[metal] @ git+https://github.com/utsav1033/carmen"
 export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
 carmen                              # the app
 ```
