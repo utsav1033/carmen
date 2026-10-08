@@ -87,7 +87,7 @@ flowchart LR
 On an Apple Silicon Mac, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv tool install "carmen-kernels[metal,models]"   # or: pip install "carmen-kernels[metal,models]"
+pip install carmen-kernels          # or: uv tool install carmen-kernels
 export ANTHROPIC_API_KEY=...        # or put it in a .env file where you run carmen
 carmen                              # the app
 carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, on your Mac (no API key)
@@ -100,7 +100,7 @@ carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, 
 | `carmen run <op> [--for qwen0.5b]` | let Carmy cook one kernel; `--for` judges it at a real model's shapes |
 | `carmen broken <op>` | plant bugs and check the judge catches every one, next to a KernelBench-style check |
 | `carmen judge <op> <file>` | judge a kernel you wrote |
-| `carmen e2e [model]` | run a real model stock vs with carmen's kernels: tok/s, noise range, same answers? (`pip install 'carmen-kernels[models]'`) |
+| `carmen e2e [model]` | run a real model stock vs with carmen's kernels: tok/s, noise range, same answers? |
 | `carmen profile [model]` | where a model spends its time, step by step |
 | `carmen bench` | the feedback loop vs plain best-of-N, same budget |
 

@@ -16,7 +16,14 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Environment :: Console",
 ]
-dependencies = ["numpy>=1.26", "anthropic>=1.0", "textual>=0.80"]
+dependencies = [
+    "numpy>=1.26",
+    "anthropic>=1.0",
+    "textual>=0.80",
+    # On Apple Silicon, the GPU parts install by default, so `pip install carmen-kernels` is all you need.
+    "mlx>=0.25; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm>=0.20; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 
 [project.optional-dependencies]
 metal = ["mlx>=0.25"]

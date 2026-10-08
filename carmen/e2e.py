@@ -149,7 +149,7 @@ def _imports():
         from mlx_lm import load
         from mlx_lm.models.cache import make_prompt_cache
     except ImportError as e:  # pragma: no cover - only on machines without MLX
-        raise SystemExit("carmen e2e needs MLX and mlx-lm on Apple Silicon: pip install 'carmen-kernels[models]'") from e
+        raise SystemExit("carmen e2e needs MLX and mlx-lm on Apple Silicon: run it on an Apple Silicon Mac, where pip install carmen-kernels includes them") from e
     from .profile import offline_retry
     return mx, nn, offline_retry(load), make_prompt_cache
 
