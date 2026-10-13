@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "cancel",
+    "rows": 14,
+    "n": 5354,
+    "dtype": "bfloat16",
+    "seed": 1387079811,
+    "family": "fuzz",
+    "inner": 0
+  },
+  {
+    "kind": "tiny_rows",
+    "rows": 23,
+    "n": 2998,
+    "dtype": "bfloat16",
+    "seed": 104703745,
+    "family": "fuzz",
+    "inner": 0
+  },
+  {
+    "kind": "cancel",
+    "rows": 42,
+    "n": 1802,
+    "dtype": "bfloat16",
+    "seed": 778976858,
+    "family": "fuzz",
+    "inner": 0
+  },
+  {
+    "kind": "tiny_rows",
+    "rows": 18,
+    "n": 1718,
+    "dtype": "bfloat16",
+    "seed": 1800960511,
+    "family": "fuzz",
+    "inner": 0
+  }
+]

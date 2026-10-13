@@ -1,0 +1,427 @@
+[
+  {
+    "id": "L001",
+    "text": "The static checker rejects any source containing the token '#pragma', because MLX already includes the Metal standard library. Leave out '#pragma unroll' and similar directives. Write plain fixed-trip-count loops over a compile-time template constant instead; attempts written that way compiled and verified.",
+    "kind": "chip",
+    "op": "layernorm",
+    "evidence": [
+      "0-0",
+      "0-2"
+    ],
+    "u": 0.3196289891899311,
+    "n_ret": 84,
+    "n_ado": 84,
+    "adopted_ops": [
+      "layernorm",
+      "rmsnorm",
+      "softmax",
+      "matmul",
+      "attention",
+      "residual_rmsnorm",
+      "mlp_down",
+      "mlp_up",
+      "add_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L003",
+    "text": "In a staged-tile attention kernel, use a larger query tile per threadgroup (TG=256 threads, 32 queries) so each staged K/V block is reused by more queries. This was the best configuration measured. Both scalar kernels still reached only 0.2-0.4x of stock MLX, and their throughput was flat or falling for sequences longer than 1024. Closing the gap probably needs simdgroup_matrix tiles for QK^T and PV, plus skipping masked causal blocks, rather than more scalar tuning.",
+    "kind": "op",
+    "op": "attention",
+    "evidence": [
+      "0-2",
+      "0-0"
+    ],
+    "u": 0.1604166666666667,
+    "n_ret": 7,
+    "n_ado": 7,
+    "adopted_ops": [
+      "attention"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L004",
+    "text": "With large-magnitude attention scores in float32, the tolerance is tight, around 2e-5 row-relative. Both simdgroup_matrix kernels failed it with an identical error at every tile size. Each folded scale*log2(e) into Q before the QK^T product, and each used 8x8 MMA accumulation order. The scalar kernel passed every test: it accumulated the raw Q\u00b7K dot in fp32 and multiplied by scale*log2(e) only afterwards. The cause is not isolated. A fast MMA kernel should first try keeping Q unscaled and scaling S after the MMA, then retest the large-scores case.",
+    "kind": "op",
+    "op": "attention",
+    "evidence": [
+      "0-0"
+    ],
+    "u": 0.1875,
+    "n_ret": 3,
+    "n_ado": 3,
+    "adopted_ops": [
+      "attention"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L006",
+    "text": "Run the online softmax directly on the MMA fragment registers instead of round-tripping S through threadgroup memory. Each lane holds 2 adjacent elements of row fm=(q&4)+((lane>>1)&3), at columns fn=(q&2)*2+(lane&1)*2, where q=lane>>2. Get the row max and row sum with simd_shuffle_xor by 1 and then by 8. Scale the O fragments' thread_elements by alpha directly. One attempt instead stored S to threadgroup memory, used per-row simd_max, and rescaled through a diagonal-matrix MMA. Its MMA configs ended up slower than its own scalar path (0.30x), versus 0.54x for the in-register version.",
+    "kind": "op",
+    "op": "attention",
+    "evidence": [
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L007",
+    "text": "For residual add + RMSNorm with one threadgroup per row, keep h = x + res in fp32 registers. Write h once, reduce the sum of squares with simd_sum plus a small threadgroup buffer, then write y straight from the registers. Each element then costs only 3 reads and 2 writes. This beat stock MLX by about 1.1-1.25x once there were hundreds of rows or more. It lost (about 0.9x) on single-row inputs, where launch overhead dominates. For rows up to about 4096, 256 threads x 4 contiguous elements x 4 cached chunks was the best config.",
+    "kind": "op",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.16372490079365082,
+    "n_ret": 21,
+    "n_ado": 18,
+    "adopted_ops": [
+      "residual_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L008",
+    "text": "In a load/store-interleaved pass, a store to an output device buffer between loads keeps later loads from being hoisted, because the compiler cannot prove the output does not alias the inputs. This limits memory-level parallelism. In memory-bound row kernels with a few cached elements per thread, load every input first (x, residual and weight) into register arrays, then compute, store and reduce. This raised the f16 mid-size shape (~512 rows of <1024) from ~69% to ~91% of peak bandwidth.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "1-2",
+      "1-1"
+    ],
+    "u": 0.19961651716966552,
+    "n_ret": 33,
+    "n_ado": 32,
+    "adopted_ops": [
+      "residual_rmsnorm",
+      "mlp_down",
+      "mlp_up",
+      "add_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L009",
+    "text": "For half-precision memory-bound kernels, do not rely on the compiler to merge contiguous scalar accesses into wide ones. Moving bounds checks to per-chunk granularity, so the scalar chunk loops were branch-free, gave no gain: f16 stayed at ~69% of peak. Explicit aligned vec<T,4> loads and stores, guarded by n % 4 == 0 with a scalar fallback, lifted the same shape to ~86% of peak.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "1-0",
+      "1-1"
+    ],
+    "u": 0.10855884550553735,
+    "n_ret": 33,
+    "n_ado": 26,
+    "adopted_ops": [
+      "residual_rmsnorm",
+      "mlp_down",
+      "mlp_up",
+      "add_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L010",
+    "text": "A batch of a single short row (under 1024 elements) is launch-latency bound: all variants stayed near 0.92x vs stock, whatever the threadgroup size or vectorization. Don't spend tuning effort there. The gains come from multi-row batches, where small-to-moderate threadgroups (64-256 threads, 4 vec4 chunks per thread) were the best configs.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": -0.05302541398295967,
+    "n_ret": 30,
+    "n_ado": 11,
+    "adopted_ops": [
+      "residual_rmsnorm",
+      "add_rmsnorm"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L011",
+    "text": "For many rows (hundreds or more) of width around 1024 in fp16, launch one threadgroup of only 32 threads (a single simdgroup) per row. Each thread loads all of its x, residual and weight data up front as 4-wide vectors, about 8 chunks per thread, before doing any store. Then compute h in fp32, store h, and reduce the sum of squares. Write y straight from registers, so the kernel does 3 reads and 2 writes per element. This setup measured about 1.36x over stock in three independent kernels. Larger threadgroups with fewer chunks were only picked for the single-row case.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.0035685083467967213,
+    "n_ret": 27,
+    "n_ado": 15,
+    "adopted_ops": [
+      "residual_rmsnorm",
+      "add_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L013",
+    "text": "For bandwidth-bound row kernels on half/bfloat where the row length is a multiple of 8 and there are hundreds of rows, have each thread move 8 contiguous elements with one 16-byte (uint4, reinterpreted via as_type) load or store. Use one simdgroup per row (TG=32, total from simd_sum alone, no threadgroup barrier) or TG=64, with 4 chunks per thread. Keep a scalar fallback for other lengths. All three variants of this verified at 1.32-1.44x over stock MLX in the many-row regime.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "1-0",
+      "1-1",
+      "1-2"
+    ],
+    "u": -0.10639400047743058,
+    "n_ret": 24,
+    "n_ado": 6,
+    "adopted_ops": [
+      "residual_rmsnorm",
+      "mlp_up"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L014",
+    "text": "For residual add + RMSNorm with both outputs, load the x, res and w chunks first. Keep h = x + res in fp32 registers, store h, and accumulate sum(h^2). After the reduction, write y = h * inv * w straight from registers, so each element costs 3 reads and 2 writes with no reload. This verified as correct on every visible test and beat stock in the many-row regime. A single short row (1 row, under 1024 elements) is launch-bound and stays at about 0.86-0.93x of stock whatever the TG and chunk settings, so tuning effort there is wasted.",
+    "kind": "op",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "1-0",
+      "1-1",
+      "1-2"
+    ],
+    "u": 0.09170634920634922,
+    "n_ret": 9,
+    "n_ado": 8,
+    "adopted_ops": [
+      "residual_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L015",
+    "text": "For residual add + RMSNorm where each row fits in registers (row length up to a few thousand), use one threadgroup per row. Load x, res and w as vec4 into registers, form h = x + res in fp32 and store h. Reduce sum(h^2) with simd_sum plus a small threadgroup buffer, then write y from the registered h. That is 3 reads and 2 writes per element with no re-read of h. Many-row (prefill) inputs ran about 1.4x faster than compiled stock. TG from 32 to 256 performed about the same.",
+    "kind": "op",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.06978458049886621,
+    "n_ret": 6,
+    "n_ado": 5,
+    "adopted_ops": [
+      "residual_rmsnorm"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L016",
+    "text": "A single-row input (decode, under 1024 elements) is launch/latency bound. The register-cached fused kernel only matched compiled stock there (0.99-1.02x), whatever TG or chunk count was used. Bandwidth optimizations pay off only when there are hundreds of rows. To gain on tiny shapes, cut fixed overhead such as dispatch or extra passes, not memory traffic.",
+    "kind": "chip",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": -0.12917881944444445,
+    "n_ret": 21,
+    "n_ado": 4,
+    "adopted_ops": [
+      "residual_rmsnorm"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L017",
+    "text": "For residual add + RMSNorm with both outputs, use a one-pass kernel with one threadgroup per row. Each thread issues all of its vec4 loads of x, res and w first, keeps h = x + res in fp32 registers, and accumulates sum(h^2). After a simd_sum plus threadgroup reduction, it writes h and y from those registers. That is 3 reads and 2 writes per element, with no re-read of h. On many-row (prefill) inputs with rows near 1024 this ran at 1.36-1.47x stock MLX and 1.44-1.52x mx.compile. A small TG of 32-64 with several vec4 chunks per thread worked well.",
+    "kind": "op",
+    "op": "residual_rmsnorm",
+    "evidence": [
+      "2-0",
+      "2-1",
+      "2-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L019",
+    "text": "For a decode 4-bit matvec with K in the 4096-8192 range, split the K loop across every thread of the threadgroup rather than giving each simdgroup its own columns over the full K. Each thread takes one packed uint32 per step and reuses its 8 activations for all BN columns. Reduce with simd_sum, then add up the per-simdgroup partials in threadgroup memory. The extra simdgroups per tile give more memory-level parallelism on the weight stream. This went from 0.82-0.97x to 1.02x vs stock. TG=64 with BN=8 was best.",
+    "kind": "chip",
+    "op": "mlp_down",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": -0.14358974358974363,
+    "n_ret": 12,
+    "n_ado": 1,
+    "adopted_ops": [
+      "mlp_up"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L020",
+    "text": "For 4-bit dequant dot products, avoid a shift-and-mask per nibble. Pre-scale the activations by 1, 1/16, 1/256 and 1/4096. Then extract each nibble with a mask only, float(w & 0xF0) and so on, on the low and high 16-bit halves. Factor the group term as scale*sum(q*a) + bias*sum(a), computing sum(a) once per activation chunk and sharing it across columns. The per-nibble-shift version reached 0.82x vs stock, while both masked-nibble versions reached 0.97-1.02x.",
+    "kind": "op",
+    "op": "mlp_down",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L018",
+    "text": "In fused rmsnorm+quantized matmul at decode, the per-row 1/rms factor can be pulled out of every dot product. Do the work in a single pass: accumulate sum(h^2) while streaming the weights, accumulate dot(W, h*w) unnormalized, then multiply the simd_sum results by inv_rms at the end. A separate RMS reduction pass that re-reads x and res before the matmul loop scored 0.99x vs mx.compile. The single-pass version reached 1.14x and is the champion.",
+    "kind": "op",
+    "op": "mlp_up",
+    "evidence": [
+      "0-0",
+      "0-2"
+    ],
+    "u": 0.17993197278911569,
+    "n_ret": 6,
+    "n_ado": 6,
+    "adopted_ops": [
+      "mlp_up"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L021",
+    "text": "When the reduction dimension fits in one pass of the simdgroup (K up to 1024, so each lane owns one 32-element unit), compute that lane's activations once and keep them in registers. Then walk many output columns per simdgroup (8-16), loading the next column chunk's packed weights and scales into registers before the current chunk's dot products, simd_sums and stores. This hides load latency behind compute and keeps stores from blocking load hoisting. It took decode from 1.13x to 1.35x vs stock.",
+    "kind": "chip",
+    "op": "mlp_up",
+    "evidence": [
+      "1-2",
+      "1-1"
+    ],
+    "u": -0.01768707482993198,
+    "n_ret": 6,
+    "n_ado": 3,
+    "adopted_ops": [
+      "mlp_up"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L022",
+    "text": "In single-row (decode) quantized GEMV, each simdgroup recomputing its lane's activations to serve only a few columns makes the activation reads and math cost more than the 4-bit weight stream. Give each simdgroup more columns and compute the activations once per K-unit before the column loop. Going from 4 to 8-16 columns per simdgroup sped up decode (1.09x to 1.13x vs stock). Adding vector loads alone, while still holding per-column weights for all columns at once, gave only 1.09x.",
+    "kind": "chip",
+    "op": "mlp_up",
+    "evidence": [
+      "1-1",
+      "1-0"
+    ],
+    "u": -0.01768707482993198,
+    "n_ret": 6,
+    "n_ado": 3,
+    "adopted_ops": [
+      "mlp_up"
+    ],
+    "status": "candidate"
+  },
+  {
+    "id": "L023",
+    "text": "For fused rmsnorm+4-bit matmul, there is no need for a separate normalization pass. Accumulate sum(h^2) alongside the dot products using the unnormalized h*w, then multiply the final simd_sum by inv_rms. Fold the affine bias as bias*sum(a) per group, and premultiply a by the nibble-position scale so masked nibbles need no shifting. This single-pass form verified correct in every attempt.",
+    "kind": "op",
+    "op": "mlp_up",
+    "evidence": [
+      "1-0",
+      "1-1",
+      "1-2"
+    ],
+    "u": 0.11904761904761904,
+    "n_ret": 3,
+    "n_ado": 3,
+    "adopted_ops": [
+      "mlp_up"
+    ],
+    "status": "resident"
+  },
+  {
+    "id": "L024",
+    "text": "For a 4-bit decode matvec with K up to 1024 (one 32-wide K-unit per lane), the fastest layout keeps all of each lane's activation values in registers and has each simdgroup walk many columns, prefetching the next column's packed weights and scales. Load the lane's 32 x/res/norm-weight halfs with 16-byte (8-half) vector loads issued before any math. This configuration, run with 2 simdgroups per threadgroup and 16 columns per threadgroup, beat the variants tried around it.",
+    "kind": "chip",
+    "op": "mlp_up",
+    "evidence": [
+      "2-0",
+      "2-1",
+      "2-2"
+    ],
+    "u": -0.15000000000000002,
+    "n_ret": 3,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L025",
+    "text": "In this column-walking decode kernel, cutting per-column reduction cost did not help. Neither a transposed butterfly (reducing 8 columns' gate/up partials with 17 shuffles instead of two simd_sums per column) nor splitting the dequant FMA chains into two accumulators beat the plain version, which does a per-column simd_sum and a lane-0 silu*up store. The kernel is bound by weight loads, so keep the simple reduction and spend effort on the load path.",
+    "kind": "op",
+    "op": "mlp_up",
+    "evidence": [
+      "2-0",
+      "2-1",
+      "2-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L026",
+    "text": "For a fused residual-add + RMSNorm with one threadgroup per row, keep the row in registers. Each thread loads its x, res and w chunks as aligned 4-wide vectors, forms h in fp32, reduces sum(h^2) with simd_sum plus one threadgroup-memory step, then writes y from registers. That is 3 reads and 1 write per element. Rows up to a few thousand elements that fit in TG*4*chunks ran at ~1.45x over stock and 75-83% of peak bandwidth.",
+    "kind": "op",
+    "op": "add_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  },
+  {
+    "id": "L027",
+    "text": "Rows longer than the register cache (about 16384+ elements at TG 256-512 with 4-8 chunks) fell back to a two-pass loop that re-reads x and res. These rows got only ~1.0x in fp32 and 51-53% of peak bandwidth. Long rows need a different approach, such as more chunks per thread, a larger TG, or splitting a row across threadgroups. Do not rely on the two-pass fallback.",
+    "kind": "chip",
+    "op": "add_rmsnorm",
+    "evidence": [
+      "0-0",
+      "0-1",
+      "0-2"
+    ],
+    "u": 0.0,
+    "n_ret": 0,
+    "n_ado": 0,
+    "adopted_ops": [],
+    "status": "candidate"
+  }
+]
