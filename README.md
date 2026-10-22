@@ -90,13 +90,14 @@ On an Apple Silicon Mac:
 pip install carmen-kernels          # or: uv tool install carmen-kernels
 carmen                              # the app
 carmen speedup                      # Qwen 2.5 0.5B, stock vs carmen's kernels, on your Mac (no API key)
+carmen speedup qwen0.5b qwen3b      # both models in turn, then one table side by side
 carmen key                          # only to cook new kernels: paste an Anthropic key once, saved for you only
 ```
 
 | command | what it does |
 |---|---|
 | `carmen` | the terminal app: what's proven, speed up a model, pick a kernel, watch it cook |
-| `carmen speedup [model]` | stock MLX vs `mx.compile` vs carmen's bundled kernels on a real model, paired runs; no API key (`--quick` for ~2 min) |
+| `carmen speedup [models…]` | stock MLX vs `mx.compile` vs carmen's bundled kernels on one or more real models, paired runs, side-by-side table; no API key (`--quick` for ~2 min a model) |
 | `carmen run <op> [--for qwen0.5b]` | let Carmy cook one kernel; `--for` judges it at a real model's shapes |
 | `carmen broken <op>` | plant bugs and check the judge catches every one, next to a KernelBench-style check |
 | `carmen judge <op> <file>` | judge a kernel you wrote |

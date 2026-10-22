@@ -339,6 +339,11 @@ def cmd_profile(args) -> int:
 
 
 def cmd_e2e(args) -> int:
+    return _e2e(args)[0]
+
+
+def _e2e(args) -> tuple[int, list | None, dict]:
+    """The e2e command; also returns the results and the speed limit so `speedup` can compare models."""
     from . import e2e
     ui.banner(f"e2e · {args.model}")
     kernel = config = kernel_id = regime_champs = None
@@ -359,7 +364,7 @@ def cmd_e2e(args) -> int:
             found = e2e.latest_champion(Path(args.runs))
             if not found:
                 print(f"{ui.BAD} no {e2e.OP} champion in {args.runs}: run `carmen run {e2e.OP}` or pass --kernel golden")
-                return 2
+                return 2, None, {}
             kernel, config, kernel_id, verdict = found
             print(f"kernel: {ui.s(kernel_id, 'bold')} (champion of your latest {e2e.OP} run), config {config}")
             for r in verdict.get("timing", []):
@@ -379,7 +384,7 @@ def cmd_e2e(args) -> int:
                 bundle = champions.for_model(args.model) or (champions.available() or [None])[0]
                 if bundle is None or op not in champions.kernels(bundle):
                     print(f"{ui.BAD} no {op} kernel: run `carmen run {op}` or pass --kernel golden")
-                    return 2
+                    return 2, None, {}
                 k, cfg, origin = champions.kernels(bundle)[op]
                 if args.kernel != "bundled":
                     print(ui.s(f"no {op} champion of your own in {args.runs}; using the one carmen ships with", "grey"))
@@ -388,7 +393,7 @@ def cmd_e2e(args) -> int:
             print(f"{op}: {ui.s(src, 'bold')} {mlp_kernels[op][1]}")
         kernel_id = ", ".join(filter(None, [kernel_id] + ids))
     if args.calls:
-        return _print_calls(e2e, args, kernel, config, kernel_id)
+        return _print_calls(e2e, args, kernel, config, kernel_id), None, {}
     if "stock" not in modes:
         modes = ["stock"] + modes  # every comparison is against stock
     results = e2e.run(args.model, modes, kernel, config, args.prompt, args.gen, args.repeats,
@@ -432,27 +437,62 @@ def cmd_e2e(args) -> int:
                "flip a near-tie between two words, so a late divergence with a tiny logit difference is rounding, "
                "not a bug; an early one with a large difference is a bug.", "grey"))
     print(ui.s(f"saved {e2e.save(args.model, results, kernel_id, Path(args.runs), extra)}", "grey"))
-    return 0
+    return 0, results, extra
 
 
 def cmd_speedup(args) -> int:
-    """One command, no API key: stock MLX vs MLX compiled vs carmen's bundled kernels, paired turns."""
-    from . import target
-    model = target.ALIASES.get(args.model, args.model)
-    bundle = champions.for_model(model)
-    if bundle:
-        r = champions.result(bundle)
-        lo, hi = r["range"]
-        print(ui.s(f"published: {r['decode_vs_stock']:.2f}x decode [{lo:.2f}-{hi:.2f}] on an {r['chip']}, "
-                   f"{r['turns']} turns, same output. now measuring on yours.", "grey"))
-    else:
-        print(ui.s(f"carmen's kernels were tuned for {', '.join(champions.available())}; they are correct on any "
-                   "Llama/Qwen-style 4-bit model, but this one hasn't been measured. now measuring.", "grey"))
-    print(ui.s("for a clean number: plug in, quit browsers and other heavy apps, and leave the Mac alone.", "grey"))
-    e2e_args = argparse.Namespace(model=model, modes="stock,compile,mlp+compile", kernel=args.kernel, prompt=512,
-                                  gen=128 if args.quick else 256, repeats=10 if args.quick else 30,
-                                  runs=args.runs, calls=False)
-    return cmd_e2e(e2e_args)
+    """One command, no API key: stock MLX vs MLX compiled vs carmen's bundled kernels, paired turns.
+    Several models run one after another, then one table compares them."""
+    import gc
+    from . import e2e, target
+    done = []
+    for alias in args.model or ["qwen0.5b"]:
+        model = target.ALIASES.get(alias, alias)
+        bundle = champions.for_model(model)
+        if bundle:
+            r = champions.result(bundle)
+            lo, hi = r["range"]
+            print(ui.s(f"published: {r['decode_vs_stock']:.2f}x decode [{lo:.2f}-{hi:.2f}] on an {r['chip']}, "
+                       f"{r['turns']} turns, same output. now measuring on yours.", "grey"))
+        else:
+            print(ui.s(f"carmen's kernels were tuned for {', '.join(champions.available())}; they are correct on any "
+                       "Llama/Qwen-style 4-bit model, but this one hasn't been measured. now measuring.", "grey"))
+        print(ui.s("for a clean number: plug in, quit browsers and other heavy apps, and leave the Mac alone.", "grey"))
+        e2e_args = argparse.Namespace(model=model, modes="stock,compile,mlp+compile", kernel=args.kernel, prompt=512,
+                                      gen=128 if args.quick else 256, repeats=10 if args.quick else 30,
+                                      runs=args.runs, calls=False)
+        code, results, extra = _e2e(e2e_args)
+        if code:
+            return code
+        done.append((alias, results, extra))
+        gc.collect()  # let this model's weights go before loading the next
+    if len(done) > 1:
+        _compare_models(e2e, done)
+    return 0
+
+
+def _compare_models(e2e, done) -> None:
+    ui.rule("models side by side · decode")
+    rows = []
+    for alias, results, extra in done:
+        stock = results[0]
+        by = {r.mode: r for r in results}
+        limit = extra.get("decode_speed_limit_tps")
+        cells = [alias, f"{stock.decode_tps:,.1f}", ui.pct(stock.decode_tps / limit) if limit else ""]
+        for mode in ("compile", "mlp+compile"):
+            r, pr = by.get(mode), None
+            if r:
+                pr = e2e.paired(r, stock)
+            cells.append((ui.speed(pr[0]) + ui.s(f" [{pr[1]:.2f}-{pr[2]:.2f}]", "grey")) if pr else
+                         (ui.speed(r.decode_tps / stock.decode_tps) if r else ""))
+        k = by.get("mlp+compile")
+        cells.append(e2e.beyond_noise(k, stock) if k else "")
+        rows.append(cells)
+    ui.table(["model", "stock tok/s", "stock vs limit", "compile", "carmen (mlp+compile)", "carmen beyond noise?"],
+             rows, align="lrrrrl")
+    print(ui.s("stock vs limit = stock decode as a share of the bandwidth speed limit. A bigger model sits closer to "
+               "it: each word is mostly reading weights, so fusing kernels has less to win, and how fast the 4-bit "
+               "matvec reads memory matters more.", "grey"))
 
 
 def _print_calls(e2e, args, kernel, config, kernel_id) -> int:
@@ -619,7 +659,8 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_key)
 
     p = sub.add_parser("speedup", help="make a real model faster with the kernels carmen already wrote (no API key)")
-    p.add_argument("model", nargs="?", default="qwen0.5b", help="qwen0.5b, llama1b, qwen3b, or an mlx-community id")
+    p.add_argument("model", nargs="*", help="one or more of qwen0.5b, llama1b, qwen3b, or mlx-community ids "
+                   "(default qwen0.5b); several run in turn and end with a side-by-side table")
     p.add_argument("--quick", action="store_true", help="10 turns of 128 tokens instead of 30 of 256 (~2 min, rougher)")
     p.add_argument("--kernel", default="bundled", help="bundled = the kernels carmen ships with; latest = your own runs")
     p.add_argument("--runs", default="runs")

@@ -131,6 +131,26 @@ def test_speedup_runs_stock_compile_and_the_bundled_kernels(tmp_path, monkeypatc
     assert "published: 1.03x" in out and "faster" in out
 
 
+def test_speedup_runs_several_models_and_compares_them(tmp_path, monkeypatch, capsys):
+    from carmen import judge
+    names = []
+    R = e2e.Result
+
+    def fake_run(name, modes, *a, **k):
+        names.append(name)
+        tps = 150.0 if "0.5B" in name else 40.0
+        return [R("stock", 2000, tps, tokens_total=256, decode_lo=tps, decode_hi=tps, turns=30,
+                  decode_turns=[tps] * 30, weight_bytes=int(2.8e8 if "0.5B" in name else 1.7e9)),
+                R("compile", 2000, tps, 256, 256, 0.0, True, turns=30, decode_turns=[tps] * 30),
+                R("mlp+compile", 2000, tps * 1.03, 256, 256, 0.0, True, turns=30, decode_turns=[tps * 1.03] * 30)]
+    monkeypatch.setattr(e2e, "run", fake_run)
+    monkeypatch.setattr(judge, "peak_gbps", lambda backend: {"chip": "M4", "peak_gbps": 96.0})
+    assert cli.main(["speedup", "qwen0.5b", "qwen3b", "--quick", "--runs", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert names == ["mlx-community/Qwen2.5-0.5B-Instruct-4bit", "mlx-community/Qwen2.5-3B-Instruct-4bit"]
+    assert "models side by side" in out and "qwen3b" in out and "stock vs limit" in out
+
+
 def test_offline_retry_only_on_network_errors(monkeypatch):
     import os
     from carmen.profile import offline_retry
