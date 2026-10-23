@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from . import broken, champions, dotenv, judge, ops, ui
+from . import levers as levers_mod
 from .backends import Kernel
 from .carmy import DEFAULT_MODEL
 
@@ -495,6 +496,63 @@ def _compare_models(e2e, done) -> None:
                "matvec reads memory matters more.", "grey"))
 
 
+def cmd_levers(args) -> int:
+    """No API key: speculative decoding, a quantized KV cache and 3-bit weights vs stock, at one or
+    more context lengths, paired turns, with drift scored for the lossy ones."""
+    from . import e2e, levers, target
+    model = target.ALIASES.get(args.model, args.model)
+    contexts = [int(c) for c in args.prompt.split(",")]
+    print(ui.s("for a clean number: plug in, quit browsers and other heavy apps, and leave the Mac alone.", "grey"))
+    results = levers.run(model, args.levers.split(","), contexts, gen_tokens=128 if args.quick else args.gen,
+                         repeats=5 if args.quick else args.repeats, draft=target.ALIASES.get(args.draft, args.draft),
+                         draft_tokens=args.draft_tokens, on_progress=lambda m: print(ui.s("  " + m, "grey")))
+    peak = judge.peak_gbps("metal")["peak_gbps"]
+    for ctx in contexts:
+        group = [r for r in results if r.context == ctx]
+        stock = group[0]
+        ui.rule(f"{ctx:,} prompt tokens · median of {stock.turns} turns each")
+        rows = []
+        for r in group:
+            reads = f"{(r.weight_bytes + r.kv_bytes) / 1e9:.2f}"
+            if r is stock:
+                rows.append([r.mode, f"{r.decode_tps:,.1f}", "reference", "", reads, "reference", ""])
+                continue
+            pr = e2e.paired(r, stock)
+            noise = e2e.beyond_noise(r, stock)
+            same = r.tokens_match == r.tokens_total
+            answers = (ui.s(f"{ui.OK} same {r.tokens_total}", "green") if same else
+                       ui.s(f"diverge at {r.tokens_match + 1}", "yellow"))
+            quality = (f"top-1 {r.top1:.1%}, KL {r.kl:.3f}" if r.kl is not None else
+                       f"{r.accept_rate:.0%} words from draft" if r.accept_rate is not None else "")
+            rows.append([r.mode, f"{r.decode_tps:,.1f}", ui.speed(pr[0]) + ui.s(f" [{pr[1]:.2f}-{pr[2]:.2f}]", "grey"),
+                         ui.s(noise, {"faster": "green", "slower": "red"}.get(noise, "grey")), reads, answers, quality])
+        ui.table(["lever", "decode tok/s", "vs stock", "beyond noise?", "GB read/word", "answers vs stock", "quality"],
+                 rows, align="lrrlrll")
+        limit = levers.speed_limit_tps(stock.weight_bytes, stock.kv_bytes, peak)
+        print(f"each word reads {stock.weight_bytes / 1e9:.2f} GB of weights + {stock.kv_bytes / 1e9:.2f} GB of KV cache "
+              f"({stock.kv_bytes / (stock.weight_bytes + stock.kv_bytes):.0%} cache). speed limit ~{limit:,.0f} tok/s at "
+              f"{peak:.0f} GB/s; stock reaches {stock.decode_tps / limit:.0%}.")
+    if len(contexts) > 1:
+        ui.rule("decode vs stock, by context length")
+        names = list(dict.fromkeys(r.mode for r in results if r.mode != "stock"))
+        by = {(r.mode, r.context): r for r in results}
+        rows = []
+        for name in names:
+            cells = [name]
+            for ctx in contexts:
+                pr = e2e.paired(by[(name, ctx)], by[("stock", ctx)])
+                cells.append(ui.speed(pr[0]) + ui.s(f" [{pr[1]:.2f}-{pr[2]:.2f}]", "grey"))
+            rows.append(cells)
+        ui.table(["lever"] + [f"{c:,} tokens" for c in contexts], rows, align="l" + "r" * len(contexts))
+    print(ui.s("\nspec is exact under greedy decoding, so its answers should match stock; a late divergence is fp16 "
+               "rounding in the batched check. kv8, kv4 and w3 are lossy: top-1 = how often their next word agrees with "
+               "stock's, fed stock's own answer; KL = how far their next-word odds move, in nats (0 = identical). "
+               "spec can beat the speed limit: it reads the weights once for several words.", "grey"))
+    path = e2e.save(f"{model}-levers", results, None, Path(args.runs), {"peak_gbps": peak, "contexts": contexts})
+    print(ui.s(f"saved {path}", "grey"))
+    return 0
+
+
 def _print_calls(e2e, args, kernel, config, kernel_id) -> int:
     timings = e2e.call_bench(args.model, kernel, config, on_progress=lambda m: print(ui.s("  " + m, "grey")))
     for rows in sorted({t.rows for t in timings}):
@@ -665,6 +723,18 @@ def main(argv=None) -> int:
     p.add_argument("--kernel", default="bundled", help="bundled = the kernels carmen ships with; latest = your own runs")
     p.add_argument("--runs", default="runs")
     p.set_defaults(fn=cmd_speedup)
+
+    p = sub.add_parser("levers", help="beyond kernels: speculative decoding, quantized KV cache, 3-bit weights (no API key)")
+    p.add_argument("model", nargs="?", default="qwen3b", help="qwen0.5b, llama1b, qwen3b, or an mlx-community id")
+    p.add_argument("--levers", default=",".join(levers_mod.LEVERS), help="comma-separated: " + ", ".join(levers_mod.LEVERS))
+    p.add_argument("--prompt", default="512,8192", help="context lengths in tokens, comma-separated")
+    p.add_argument("--gen", type=int, default=256)
+    p.add_argument("--repeats", type=int, default=10, help="turns per lever (levers take turns)")
+    p.add_argument("--draft", default=None, help="draft model for spec (default: the family's smallest)")
+    p.add_argument("--draft-tokens", type=int, default=3, help="words the draft guesses per check")
+    p.add_argument("--quick", action="store_true", help="5 turns of 128 tokens (rougher)")
+    p.add_argument("--runs", default="runs")
+    p.set_defaults(fn=cmd_levers)
 
     p = sub.add_parser("report", help="summarize a run")
     p.add_argument("run")
