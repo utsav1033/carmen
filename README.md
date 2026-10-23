@@ -13,45 +13,60 @@
 
 ## The short version
 
-- **The AI's kernels beat Apple's MLX by up to 1.8×** on single operations.
+- **An AI wrote Metal kernels that beat Apple's MLX by up to 1.8×** on single operations, and a strict judge proved them correct.
 - **Inside a real model they barely matter:** +2% on Qwen 2.5 0.5B, and 5–7% *slower* on 1.5B and 3B.
-- **Why:** on an M4, stock MLX already runs Qwen 3B at **97% of the memory speed limit**. There's almost nothing left for faster kernels to win.
-- **What does help is reading less memory per word.** Speculative decoding made Qwen 3B **1.48× faster** at long context, with the same output.
+- **Why:** on an M4, stock MLX already decodes Qwen 3B at **97% of the memory-bandwidth limit**. There's almost nothing left for kernels to win.
+- **What does help is reading less memory per token.** Speculative decoding made Qwen 3B **1.48× faster** at an 8k prompt, with the same output.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
 
-## What's a kernel?
+## The problem
 
-A language model is a long list of small math steps: multiply by a matrix, normalize, add, repeat for every layer. Each step
-runs on the GPU as a small program called a **kernel**. Making a kernel faster, or merging several into one (**fusion**),
-is the classic way to speed a model up. Kernels are hard to write and easy to get subtly wrong, which makes them a
-good test for an AI that writes code.
+**Kernels.** Every step of a transformer (each matmul, norm, softmax, residual add) runs on the GPU as a
+kernel: a small program that thousands of threads execute at once. A model's speed is the sum of its kernels'
+time, plus a fixed cost for launching each one. Faster kernels, or fusing several into one so intermediate
+results never leave the chip, is the standard way to make inference faster.
+
+**The bet.** Good kernels are slow, expert work, and LLMs can now write them. Papers report big speedups from
+AI-written kernels. carmen asks: *can an AI make a real model on my Mac faster, with proof?*
+
+**What makes it hard.**
+
+1. **AI-written kernels are often quietly wrong.** GPU bugs hide: a row's last element isn't written, a sum in
+   fp16 drifts, a missing barrier fails once in a hundred runs, indexing that's only right on square matrices.
+   The usual check (one input size, a loose `allclose`) misses most of these: it lets through
+   [78.6% of precision bugs](https://arxiv.org/abs/2609.22220), and [a reported 1.43× was 0.88×](https://github.com/facebookresearch/kernel_bench_verified)
+   once tested properly.
+2. **Search loops game their benchmark without anyone trying.** When an LLM iterates against a score,
+   [30% of its "wins" on Metal broke](https://arxiv.org/abs/2608.08722) on a configuration it hadn't been tested on.
+3. **A kernel that's faster alone may not make the model faster.** Decoding is limited by how fast the chip reads
+   the weights: every token reads every weight once. If a model already runs near that limit, a faster kernel
+   for the remaining few percent changes nothing. You only find out by measuring the whole model, carefully.
 
 ## How carmen works
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/loop.png" alt="The AI writes a kernel and sends the code to the judge. The judge checks it is right on hundreds of inputs including secret ones, faster than Apple's MLX, and still fast inside a real model. Failures go back to the AI with exactly where the kernel is wrong. Passing kernels become the champion, and the next round improves on it." width="90%"></p>
 
-- **The AI (Carmy)** writes a kernel in Metal, Apple's GPU language. It only ever returns code; it never runs or grades anything.
-- **The judge** is plain Python. It compares every kernel against an exact answer key on hundreds of inputs, including
-  secret ones drawn fresh each round, races it against MLX, and says *where* a kernel is wrong ("row 45, last column"),
-  not just that it is.
-- **The loop** keeps the fastest correct kernel as the champion, and the next round tries to improve it. Lessons are
-  kept only when the judge proved them.
+**The writer can't grade itself.** Carmy (an LLM) returns kernel source and nothing else: no tools, no access to
+the tests or the timer. Everything it learns comes from the judge's verdicts.
 
-## Why the judge matters
+**The judge is strict, specific and partly secret.** Plain Python, in a separate process. Each kernel is checked
+against a float64 answer key on hundreds of inputs: edge lengths (1, 7, 33, 257, 4097...), huge values, masked
+rows, fp32, fp16 and bf16. The output buffer is pre-filled with NaN so unwritten elements show up, a guard zone
+catches writes past the end, and big inputs run five times and must match byte for byte (races). There are fresh
+random sizes every round, plus a hidden set the model never sees, for speed as well as correctness. Failures come
+back located: *"NaN in the last column of every row: tail handling, smallest failing input 1×2"*. Speed is timed
+interleaved against MLX **and** MLX's own fusion (`mx.compile`), with a confidence range.
 
-Most AI-kernel benchmarks check one input size against a loose tolerance. I planted **75 realistic bugs** in seven
-kernels (off-by-one at the end of a row, precision loss, missing synchronization, bugs that only show on non-square
-matrices) and checked both ways:
+**The judge is tested too.** I planted 75 realistic bugs in seven kernels: the usual one-size check catches 40,
+carmen's judge catches all 75. [How the judge works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
 
-| | bugs caught |
-|---|---|
-| a one-size, loose-tolerance check (the common standard) | 40 of 75 |
-| **carmen's judge** | **75 of 75** |
+**The loop.** Three drafts per round, in parallel. The fastest verified kernel becomes the champion, and the next
+round must make one structural change to it. Lessons carry across runs only if the judge's verdicts back them.
 
-That matches published work: the standard check misses most precision bugs ([Measuring the Checker](https://arxiv.org/abs/2609.22220)),
-and reported speedups shrink on inputs the AI hadn't seen ([KernelBench-Verified](https://github.com/facebookresearch/kernel_bench_verified)).
-Writing kernels is cheap now. **Trusting them is the hard part.** [How the judge works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
+**Then it measures the real model.** `carmen speedup` and `carmen levers` run a whole model (Qwen, through mlx-lm)
+stock vs changed, taking turns run by run so heat and background load hit both alike, and check that the
+generated tokens still match.
 
 ## Results
 
@@ -137,18 +152,6 @@ carmen key                          # only to cook new kernels: paste an Anthrop
 | `carmen bench` | the feedback loop vs plain best-of-N, same budget |
 
 From source: `git clone https://github.com/utsav1033/carmen`, then `pip install -e '.[dev]'`. Keys go in `carmen key`, a `.env` in the folder you run from, or your shell; the shell wins.
-
-## Glossary
-
-- **Kernel:** one small program the GPU runs, like "normalize these rows".
-- **Fusion:** merging several kernels into one, so data stays on the chip instead of going back to memory in between.
-- **Decode:** generating the answer one word (token) at a time. Each word reads every weight once.
-- **Memory speed limit:** model size ÷ memory bandwidth. The fastest decode can go, however good the kernels are.
-- **KV cache:** what the model remembers about the prompt so far. It grows with the prompt and is read for every new word.
-- **Speculative decoding:** a small model guesses a few words, the big model checks them all in one pass.
-- **Quantization (4-bit, 8-bit):** storing numbers in fewer bits, to read less memory. Saves bytes, can cost accuracy.
-- **`mx.compile`:** MLX's built-in automatic fusion. The fairest baseline, because every MLX user gets it for free.
-- **Paired turns:** stock and the change take turns run by run, so a Mac that heats up or gets busy hits both alike.
 
 ## Built on the shoulders of
 
