@@ -15,8 +15,8 @@
 
 - **An AI wrote Metal kernels that beat Apple's MLX by up to 1.8×** on single operations, and a strict judge proved them correct.
 - **Inside a real model they barely matter:** +2% on Qwen 2.5 0.5B, and 5–7% *slower* on 1.5B and 3B.
-- **Why:** on an M4, stock MLX already decodes Qwen 3B at **97% of the memory-bandwidth limit**. There's almost nothing left for kernels to win.
-- **What does help is reading less memory per token.** Speculative decoding made Qwen 3B **1.48× faster** at an 8k prompt, with the same output.
+- **Why:** on an M4, stock MLX already decodes Qwen 3B and 7B **at the memory-bandwidth limit**. There's almost nothing left for kernels to win.
+- **What does help is reading less memory per token.** Speculative decoding made Qwen 3B **1.48× faster** at an 8k prompt, with the same output. On 7B it gave less (1.13–1.19×), because a 0.5B draft guesses 7B's words less often.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
 
@@ -90,24 +90,34 @@ run by run, and the range in brackets is a 95% confidence range.
 | 0.5B | **1.02×** [1.01–1.02] | 64% |
 | 1.5B | 0.93× [0.93–0.95] | 87% |
 | 3B | 0.95× [0.93–0.97] | 97% |
+| 7B | not run | 103–105% |
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
-Generating each word means reading every weight in the model once. The M4 moves about 94 GB/s, so a 3B model
-(1.74 GB of weights) can't go faster than ~53 words per second. Stock MLX already does ~52. The rest of the time,
-the part fusion can shrink, is only 3%.
+Generating each word means reading every weight in the model once. I measured the M4 moving ~94 GB/s, so a 3B model
+(1.74 GB of weights) can't go much faster than ~53 words per second. Stock MLX already does ~52. The rest of the time,
+the part fusion can shrink, is a few percent.
 
-**3. What does help on bigger models: reading fewer bytes per word.** Qwen 2.5 3B, 10 turns each:
+The limit is only as good as my bandwidth measurement, and that's conservative: stock 7B comes out at 103–105% of it,
+which is impossible, so the chip actually moves a little more than 94 GB/s (Apple quotes 120). Read the last column as
+"how close to the limit", not as exact percentages. The conclusion doesn't change: from 3B up, stock MLX is at the wall.
 
-| technique | 512-token prompt | 8,192-token prompt | output |
-|---|---|---|---|
-| **speculative decoding** (0.5B guesses, 3B checks several words at once) | **1.24×** [1.20–1.28] | **1.48×** [1.46–1.53] | same as stock* |
-| 8-bit KV cache | 0.93× [0.93–0.94] | 0.86× [0.83–0.89] | 98–99% same next word |
-| 4-bit KV cache | | | broken: "The skyuser\nquiv" |
+**3. What does help on bigger models: reading fewer bytes per word.** 10 turns each:
 
-<sub>*Same words until a late fp16 rounding flip (word 95 of 256 at 512 tokens, 207 at 8k), as expected from checking words in a batch.</sub>
+| technique | model | 512-token prompt | 8,192-token prompt | output |
+|---|---|---|---|---|
+| **speculative decoding** (Qwen 0.5B guesses, the big model checks several words at once) | 3B | **1.24×** [1.20–1.28] | **1.48×** [1.46–1.53] | same as stock* |
+| | 7B | **1.19×** [1.18–1.22] | **1.13×** [1.12–1.15] | same as stock* |
+| 8-bit KV cache | 3B | 0.93× [0.93–0.94] | 0.86× [0.83–0.89] | 98–99% same next word |
+| | 7B | 0.98× [0.98–0.98] | 0.92× [0.91–0.92] | 95–98% same next word |
+| 4-bit KV cache | 3B | | | broken: "The skyuser\nquiv" |
 
-- Speculative decoding runs at 66 words/s at 8k, **past the ~46 words/s limit**, because it reads the weights once for several words.
+<sub>*Same words until a late fp16 rounding flip (3B: word 95 of 256 at 512 tokens, 207 at 8k; 7B: 211 and 81), as expected from checking words in a batch.</sub>
+
+- On 3B, speculative decoding runs at 66 words/s at 8k, **past the ~46 words/s limit** for normal decoding, because it reads the weights once for several words.
+- **It pays less on 7B, not more.** The 0.5B draft agrees with 7B less often: 46–52% of words came from the draft, against
+  57–71% with 3B. A bigger model diverges more from a tiny one, and that outweighs the draft being relatively cheaper.
+  A better-matched draft (Qwen 1.5B) is the obvious next test.
 - The 8-bit KV cache reads less memory but runs *slower*. MLX computes attention on it as four separate steps
   instead of its usual single fused kernel, and that overhead grows with the prompt. A fused kernel for it is carmen's next target.
 - The 4-bit KV cache breaks Qwen, whose attention keys have outliers that 4 bits can't hold. Speed alone would have called it a win.
@@ -122,7 +132,10 @@ the part fusion can shrink, is only 3%.
   per word (speculative decoding, a smaller KV cache), not from faster kernels for the same work.
 - **Measuring honestly took more work than writing kernels.** Running versions one after another instead of taking turns
   produced two fake wins (+40% prefill, 1.09× decode). A browser in the background swung speed by ±27%. A Mac that was
-  swapping memory made stock look like 82% of the limit instead of 97%.
+  swapping memory made stock look like 82% of the limit instead of 97%. And the limit itself is a measurement: 7B
+  "beating" it showed my bandwidth number was conservative.
+- **Speculative decoding's payoff depends on the draft, not only on model size.** It went 1.48× on 3B but 1.13× on 7B,
+  with the same 0.5B draft.
 
 New to all this? [How it all works](https://github.com/utsav1033/carmen/blob/main/docs/how-it-works.md) explains LLMs, GPUs and kernels from scratch.
 
