@@ -27,11 +27,11 @@
 
 ## TL;DR
 
-- Claude wrote Metal kernels up to **1.8× faster than Apple's MLX** on single operations, checked on hundreds of inputs.
-- In real models they barely helped: **+2%** on Qwen 0.5B, **5–7% slower** on 1.5B and 3B. MLX already runs those models about as fast as the Mac's memory allows.
-- Reading less memory per word did help: **speculative decoding, a feature mlx-lm already has, made Qwen 3B 1.48× faster** at an 8k prompt, with the same output. carmen measured it; it didn't invent it.
+- **Most AI-kernel results are graded by a check that misses a lot.** I planted 75 realistic bugs in GPU kernels: the usual check caught 40. carmen's tests caught all 75.
+- **With that grading, Claude's kernels were real wins on their own:** up to 1.8× faster than Apple's MLX.
+- **But in a real model they barely mattered:** +2–3% on Qwen 0.5B, nothing on bigger models, because MLX already reads the model's weights about as fast as the Mac allows. What did speed up bigger models was speculative decoding, an existing mlx-lm feature carmen measured: 1.48× on Qwen 3B.
 
-<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/bugs-caught.png" alt="75 bugs planted in GPU kernels: the usual one-input check caught 40 and let 35 slip through; carmen's tests caught all 75" width="90%"></p>
 
 ## What it looks like
 
