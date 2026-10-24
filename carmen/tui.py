@@ -1,6 +1,7 @@
 """carmen's terminal app. One path through it: pick an op -> cook -> inspect -> plate.
 
-    home      what are we cooking? (ops with their best results)
+    home      what are we cooking? (ops with their best results, models to speed up)
+    model     one model: size, fits this Mac?, what's measured; speedup, levers, cook for its shapes
     kitchen   live: stage rail, three draft cards, champion strip
     inspect   one kernel: code | verdict, diff vs champion, improve from here
     plated    the result: best kernel, proof, export
@@ -227,8 +228,11 @@ OptionList:focus > .option-list--option-highlighted {{ background: #26262b; colo
 #proven {{ margin: 1 2 0 2; height: auto; padding: 0 1; border: round {GREEN}; }}
 #ops {{ margin: 1 2 0 2; height: auto; max-height: 45%; }}
 #mid {{ height: auto; margin: 1 2 0 2; }}
-#models {{ width: 1fr; height: 7; margin: 0; padding: 0 1; }}
-#how {{ width: 1fr; height: 7; margin-left: 1; padding: 0 2; }}
+#models {{ width: 3fr; height: 10; margin: 0; padding: 0 1; }}
+#how {{ width: 2fr; height: 10; margin-left: 1; padding: 0 2; }}
+#modelrow {{ height: 1fr; margin: 1 2 0 2; }}
+#modelinfo {{ width: 1fr; height: 100%; padding: 1 2; }}
+#actions {{ width: 1fr; height: 100%; margin-left: 1; padding: 1 1; }}
 #below {{ height: 1fr; min-height: 11; margin: 1 2 0 2; }}
 HomeScreen #ops {{ width: 3fr; height: 100%; max-height: 100%; margin: 0; padding: 0 1; }}
 #about {{ width: 2fr; height: 100%; margin-left: 1; padding: 0 2; }}
@@ -289,10 +293,8 @@ GROUPS = [("in a real model", ("mlp_up", "mlp_down", "residual_rmsnorm")),
           ("single ops", ("softmax", "rmsnorm", "layernorm")),
           ("hard", ("matmul", "attention"))]
 
-# Models carmen can try, beyond the ones it ships measured results for.
-MODELS = [("qwen0.5b", "mlx-community/Qwen2.5-0.5B-Instruct-4bit", "qwen 2.5 0.5b"),
-          ("llama1b", "mlx-community/Llama-3.2-1B-Instruct-4bit", "llama 3.2 1b"),
-          ("qwen3b", "mlx-community/Qwen2.5-3B-Instruct-4bit", "qwen 2.5 3b")]
+FIT = {"yes": ("fits", GREEN), "tight": ("tight", AMBER), "no": ("too big", RED), "unknown": ("", DIM)}
+OTHER_MODEL = "model:__other__"
 
 
 def proven_text() -> Group:
@@ -316,7 +318,7 @@ def proven_text() -> Group:
                                (best_op, f"bold {WHITE}"), (f"\n{best['vs_compile']:.2f}× even vs mx.compile", DIM)))
     g.add_row(*cells)
     foot = Text.assemble(("measured on an Apple M4 · ", FAINT), ("m", f"bold {WHITE}"),
-                         (" then enter on a model reproduces it on yours, no API key needed", FAINT))
+                         (" picks a model: what helps it, measured on your Mac, no API key needed", FAINT))
     return Group(g, Text(""), foot)
 
 
@@ -330,15 +332,28 @@ HOW = Text.assemble(
 )
 
 
-def model_rows() -> list[tuple[str, str, Text]]:
-    from . import champions
-    measured = {r["model"]: r for r in champions.results()}
+def model_status(model_id: str, runs_dir: Path) -> Text:
+    """What's known about a model: measured on this Mac first, else what carmen published."""
+    from . import catalog, champions
+    mine = catalog.summary(model_id, runs_dir)
+    if mine:
+        return Text(mine, style=INK)
+    pub = next((r for r in champions.results() if r["model"] == model_id), None)
+    if pub:
+        return Text.assemble((f"carmen kernels {pub['decode_vs_stock']:.2f}× ", f"bold {GREEN}"), ("published", DIM))
+    return Text("not measured yet", style=DIM)
+
+
+def model_rows(runs_dir: Path) -> list[tuple[str, Text]]:
+    """One row per catalog model: size, whether it fits this Mac, whether it's downloaded, what's known."""
+    from . import catalog
     rows = []
-    for alias, mid, label in MODELS:
-        r = measured.get(mid)
-        status = (Text.assemble((f"{r['decode_vs_stock']:.2f}× ", f"bold {GREEN}"), ("✓ measured", GREEN))
-                  if r else Text("not measured yet", style=DIM))
-        rows.append((alias, mid, Text.assemble((f"  {label:<16}", f"bold {WHITE}"), ("4-bit   ", DIM), status)))
+    for m in catalog.MODELS:
+        fit, color = FIT[catalog.fits(m.gb)]
+        rows.append((m.alias, Text.assemble((f"  {m.label:<15}", f"bold {WHITE}"), (f"{m.gb:>5.2f} GB  ", DIM),
+                                            (f"{fit:<8}", color),
+                                            ("  " if catalog.downloaded(m.id) else "↓ ", FAINT),
+                                            model_status(m.id, runs_dir))))
     return rows
 
 
@@ -390,13 +405,23 @@ class HomeScreen(Screen):
         self.query_one("#how").border_title = "how it works"
         self.query_one("#ops").border_title = "kernels"
         self.query_one("#about").border_title = "about this kernel"
-        ml = self.query_one("#models", OptionList)
-        for alias, mid, label in model_rows():
-            ml.add_option(Option(label, id=f"model:{alias}"))
+        self.query_one("#models").border_subtitle = "↓ downloads on first use · fits = enough memory on this Mac"
+        self.refresh_models()
         self.refresh_ops()
 
     def on_screen_resume(self) -> None:
+        self.refresh_models()
         self.refresh_ops()
+
+    def refresh_models(self) -> None:
+        ml = self.query_one("#models", OptionList)
+        keep = ml.highlighted
+        ml.clear_options()
+        for alias, label in model_rows(self.app.runs_dir):
+            ml.add_option(Option(label, id=f"model:{alias}"))
+        ml.add_option(Option(Text("  any other mlx-community model…", style=DIM), id=OTHER_MODEL))
+        if keep is not None:
+            ml.highlighted = min(keep, ml.option_count - 1)
 
     def refresh_ops(self) -> None:
         from . import champions
@@ -453,8 +478,10 @@ class HomeScreen(Screen):
         return True
 
     def _open(self, option_id: str) -> None:
-        if option_id.startswith("model:"):
-            self.app.push_screen(SpeedupScreen(option_id[6:]))
+        if option_id == OTHER_MODEL:
+            self.app.push_screen(ModelIdScreen(), lambda mid: mid and self.app.push_screen(ModelScreen(mid)))
+        elif option_id.startswith("model:"):
+            self.app.push_screen(ModelScreen(option_id[6:]))
         elif self._cookable(option_id):
             if carmy.has_key():
                 self.app.push_screen(KitchenScreen(option_id))
@@ -524,11 +551,11 @@ class SpeedupScreen(Screen):
     """Stock MLX vs mx.compile vs carmen's bundled kernels on a real model, paired turns, live."""
     BINDINGS = [Binding("f", "full", "full run (30 turns)"), Binding("escape", "leave", "back")]
 
-    def __init__(self, alias: str):
+    def __init__(self, model: str):
+        from . import catalog
         super().__init__()
-        self.alias = alias
-        self.model = next(mid for a, mid, _ in MODELS if a == alias)
-        self.label = next(lab for a, _, lab in MODELS if a == alias)
+        m = catalog.find(model)
+        self.model, self.label = m.id, m.label
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -611,6 +638,241 @@ class SpeedupScreen(Screen):
         self.app.pop_screen()
 
 
+# ── models ───────────────────────────────────────────────────────────────────────
+class ModelIdScreen(ModalScreen[str]):
+    """Ask for any Hugging Face model id (mlx-community 4-bit models work best)."""
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="keybox", classes="pane"):
+            yield Static(Text.assemble(("any model mlx-lm can load\n", f"bold {WHITE}"),
+                                       ("e.g. mlx-community/gemma-2-2b-it-4bit. It downloads on first use.", DIM)))
+            yield Input(placeholder="mlx-community/…", id="keyin")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        mid = event.value.strip()
+        if "/" not in mid:
+            self.notify("a Hugging Face id looks like owner/name", severity="warning")
+            return
+        self.dismiss(mid)
+
+    def action_cancel(self) -> None:
+        self.dismiss("")
+
+
+def _clip(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def model_info(m, runs_dir: Path) -> Text:
+    """Everything the model page knows before running anything: size, fit, download, results."""
+    from . import catalog, levers
+    t = Text.assemble((m.label, f"bold {WHITE}"), (f"   {m.id}\n\n", DIM))
+    if m.gb:
+        fit1, c1 = FIT[catalog.fits(m.gb)]
+        fit3, c3 = FIT[catalog.fits(m.gb, catalog.SPEEDUP_COPIES)]
+        t.append_text(Text.assemble(("size      ", FAINT), (f"{m.gb:.2f} GB, read once for every word it writes\n", INK),
+                                    ("memory    ", FAINT), (f"{catalog.ram_gb():.0f} GB on this Mac · ", INK),
+                                    ("levers ", DIM), (fit1 or "?", c1), ("  speedup ", DIM), (fit3 or "?", c3),
+                                    (f" (loads {catalog.SPEEDUP_COPIES} copies)\n", DIM)))
+    t.append_text(Text.assemble(("download  ", FAINT), ("on disk\n" if catalog.downloaded(m.id) else
+                                                       f"downloads {m.gb:.2f} GB on first use\n" if m.gb else
+                                                       "downloads on first use\n", INK)))
+    draft = levers.default_draft(m.id)
+    t.append_text(Text.assemble(("spec      ", FAINT), (f"draft model {draft.split('/')[-1]}\n" if draft else
+                                                       "no draft model known for this family\n", INK)))
+    got = catalog.measured(m.id, runs_dir)
+    t.append("\nmeasured on this Mac\n", style=DIM)
+    if not got:
+        t.append("  nothing yet: run speedup or levers below\n", style=FAINT)
+    if "fusion" in got:
+        t.append_text(Text.assemble(("  " + "carmen's kernels".ljust(22), INK), speed(got["fusion"]), (" vs stock\n", DIM)))
+    for lever, name in (("spec", "speculative decoding"), ("kv8", "8-bit KV cache"), ("kv4", "4-bit KV cache")):
+        for ctx, x in sorted(got.get(lever, {}).items()):
+            t.append_text(Text.assemble((f"  {name:<22}", INK), speed(x), (f" at a {ctx:,}-token prompt", DIM)))
+            top1 = got.get("quality", {}).get(lever, {}).get(ctx)
+            if top1 is not None and top1 < 0.9:  # fast but wrong is not a win
+                t.append(f"  ✗ broken output ({top1:.0%} match)", style=f"bold {RED}")
+            t.append("\n")
+    if "limit_share" in got:
+        t.append_text(Text.assemble(("  stock MLX runs at ", DIM), (f"{got['limit_share']:.0%}", f"bold {WHITE}"),
+                                    (" of the memory speed limit", DIM)))
+    if m.note:
+        t.append(f"\n\n{m.note}", style=INK)
+    return t
+
+
+class ModelScreen(Screen):
+    """One model: what's known about it, and the three things carmen can do for it."""
+    AUTO_FOCUS = "#actions"
+    BINDINGS = [Binding("enter", "go", "open", priority=True), Binding("s", "speedup", "speedup"),
+                Binding("l", "levers", "levers"), Binding("escape", "app.pop_screen", "back")]
+
+    def __init__(self, model: str):
+        from . import catalog
+        super().__init__()
+        self.m = catalog.find(model)
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield crumb("home")
+        with Horizontal(id="modelrow"):
+            yield Static("", id="modelinfo", classes="pane")
+            yield OptionList(id="actions")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        from . import target
+        self.query_one("#modelinfo").border_title = "this model"
+        self.query_one("#actions").border_title = "what carmen can do"
+        acts = self.query_one("#actions", OptionList)
+        acts.add_option(Option(Text.assemble(("measure, no API key\n", f"bold {DIM}")), disabled=True))
+        acts.add_option(Option(Text.assemble(("  speedup  ", f"bold {WHITE}"),
+                                             ("carmen's fused kernels vs stock MLX vs mx.compile", INK)), id="speedup"))
+        acts.add_option(Option(Text.assemble(("  levers   ", f"bold {WHITE}"),
+                                             ("speculative decoding and an 8-bit KV cache vs stock", INK)), id="levers"))
+        acts.add_option(Option(Text.assemble(("\ncook a kernel for this model's exact shapes · needs an API key",
+                                              f"bold {DIM}")), disabled=True))
+        for op in target.TARGETABLE:
+            acts.add_option(Option(Text.assemble((f"  {op:<17}", f"bold {WHITE}"),
+                                                 (_clip(ops.OPS[op].summary, 40), INK)), id=f"cook:{op}"))
+        acts.highlighted = 1
+        self.refresh_info()
+
+    def on_screen_resume(self) -> None:
+        self.refresh_info()
+
+    def refresh_info(self) -> None:
+        self.query_one("#modelinfo", Static).update(model_info(self.m, self.app.runs_dir))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.open(event.option.id)
+
+    def action_go(self) -> None:
+        acts = self.query_one("#actions", OptionList)
+        if acts.highlighted is not None:
+            self.open(acts.get_option_at_index(acts.highlighted).id)
+
+    def action_speedup(self) -> None:
+        self.open("speedup")
+
+    def action_levers(self) -> None:
+        self.open("levers")
+
+    def open(self, act: str | None) -> None:
+        from . import catalog
+        if act == "speedup":
+            if catalog.fits(self.m.gb, catalog.SPEEDUP_COPIES) == "no":
+                self.notify(f"speedup loads {catalog.SPEEDUP_COPIES} copies ({self.m.gb * catalog.SPEEDUP_COPIES:.0f} GB): "
+                            "too much for this Mac's memory, it would swap for hours. Try levers.", severity="warning")
+                return
+            self.app.push_screen(SpeedupScreen(self.m.id))
+        elif act == "levers":
+            self.app.push_screen(LeversScreen(self.m.id))
+        elif act and act.startswith("cook:"):
+            op, mid = act[5:], self.m.id
+            if carmy.has_key():
+                self.app.push_screen(KitchenScreen(op, target_model=mid))
+            else:
+                self.app.push_screen(KeyScreen(), lambda ok: ok and self.app.push_screen(KitchenScreen(op, target_model=mid)))
+
+
+class LeversScreen(Screen):
+    """Speculative decoding and an 8-bit KV cache vs stock on one model, paired turns, speed and drift."""
+    BINDINGS = [Binding("f", "full", "full run (512 + 8k tokens, 10 turns)"), Binding("escape", "leave", "back")]
+
+    def __init__(self, model: str):
+        from . import catalog
+        super().__init__()
+        m = catalog.find(model)
+        self.model, self.label = m.id, m.label
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield crumb("home")
+        yield Static("", id="speedres", classes="pane")
+        yield RichLog(id="judgelog", wrap=True, markup=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.query_one("#speedres").border_title = f"{self.label} · what reads fewer bytes per word"
+        self.query_one("#judgelog").border_title = "progress"
+        self.start(quick=True)
+
+    def start(self, quick: bool) -> None:
+        from . import levers
+        if self.app.busy:
+            self.notify("already running", severity="warning")
+            return
+        self.app.busy = True
+        names = ["stock", "kv8"] if levers.default_draft(self.model) is None else ["stock", "spec", "kv8"]
+        contexts, gen, turns = ((512,), 128, 5) if quick else ((512, 8192), 256, 10)
+        self.query_one("#speedres", Static).update(Text.assemble(
+            (f"measuring {', '.join(names[1:])} vs stock: {turns} paired turns at "
+             f"{' and '.join(f'{c:,}' for c in contexts)} prompt tokens", INK),
+            (" · for a clean number, quit browsers and leave the Mac alone", DIM)))
+        self.run_levers(names, contexts, gen, turns)
+
+    @work(thread=True, exclusive=True)
+    def run_levers(self, names: list[str], contexts: tuple, gen: int, turns: int) -> None:
+        from . import e2e, levers
+        log = self.query_one("#judgelog", RichLog)
+
+        def say(m: str) -> None:
+            self.app.call_from_thread(log.write, Text(m, style=DIM))
+        try:
+            results = levers.run(self.model, names, contexts, gen_tokens=gen, repeats=turns, on_progress=say)
+            e2e.save(f"{self.model}-levers", results, None, self.app.runs_dir, {"contexts": list(contexts)})
+            self.app.call_from_thread(self.show, results)
+        except SystemExit as e:
+            self.app.call_from_thread(self.query_one("#speedres", Static).update, Text(str(e), style=RED))
+        except Exception as e:  # shown, not hidden
+            self.app.call_from_thread(self.query_one("#speedres", Static).update,
+                                      Text(f"{type(e).__name__}: {e}", style=RED))
+        finally:
+            self.app.busy = False
+
+    def show(self, results) -> None:
+        from . import e2e
+        t = Table(box=box.SIMPLE_HEAD, expand=True, header_style=DIM, border_style=EDGE, pad_edge=False)
+        for col, j in (("", "left"), ("prompt", "right"), ("decode tok/s", "right"), ("vs stock", "right"),
+                       ("", "left"), ("quality", "left")):
+            t.add_column(col, justify=j, no_wrap=True)
+        names = {"stock": "stock MLX", "spec": "speculative decoding", "kv8": "8-bit KV cache", "kv4": "4-bit KV cache"}
+        for ctx in sorted({r.context for r in results}):
+            group = [r for r in results if r.context == ctx]
+            stock = next(r for r in group if r.mode == "stock")
+            for r in group:
+                if r is stock:
+                    t.add_row(names["stock"], f"{ctx:,}", f"{r.decode_tps:,.1f}", "", "", Text("reference", style=DIM))
+                    continue
+                p = e2e.paired(r, stock)
+                verdict = e2e.beyond_noise(r, stock)
+                color = {"faster": GREEN, "slower": RED}.get(verdict, AMBER)
+                vs = Text.assemble(speed(p[0] if p else r.decode_tps / stock.decode_tps),
+                                   (f" [{p[1]:.2f}–{p[2]:.2f}]" if p else "", DIM))
+                if r.accept_rate is not None:
+                    quality = Text(f"{r.accept_rate:.0%} of words from the draft", style=INK)
+                elif r.top1 is not None:
+                    quality = Text(f"{r.top1:.1%} same next word", style=GREEN if r.top1 > 0.95 else RED)
+                else:
+                    quality = Text("")
+                t.add_row(Text(names.get(r.mode, r.mode), style=f"bold {WHITE}"), f"{ctx:,}", f"{r.decode_tps:,.1f}",
+                          vs, Text(verdict, style=color), quality)
+        note = Text(f"\nspeculative decoding keeps the output (greedy); the KV cache is lossy, so quality is "
+                    f"measured. press f for the full run, esc to go back.", style=DIM)
+        self.query_one("#speedres", Static).update(Group(t, note))
+
+    def action_full(self) -> None:
+        self.start(quick=False)
+
+    def action_leave(self) -> None:
+        if self.app.busy:
+            self.notify("still measuring: wait for this turn to finish", severity="warning")
+            return
+        self.app.pop_screen()
+
+
 # ── kitchen ──────────────────────────────────────────────────────────────────────
 STAGES = ("draft", "judge", "improve", "plated")
 
@@ -634,9 +896,11 @@ class KitchenScreen(Screen):
     BINDINGS = [Binding("s", "stop", "stop after this round"), Binding("escape", "leave", "back"),
                 Binding("left", "app.focus_previous", show=False), Binding("right", "app.focus_next", show=False)]
 
-    def __init__(self, op: str, start: Item | None = None, rounds: int = 3, k: int = 3):
+    def __init__(self, op: str, start: Item | None = None, rounds: int = 3, k: int = 3,
+                 target_model: str | None = None):
         super().__init__()
         self.op, self.start, self.rounds, self.k = op, start, rounds, k
+        self.target_model = target_model  # judge at this model's shapes and dtype (carmen run --for)
         self.stage, self.round = "draft", 0
         self.champion: dict | None = None
         self.history: list[float] = []
@@ -677,7 +941,8 @@ class KitchenScreen(Screen):
         self.render_strip()
 
     def render_rail(self) -> None:
-        t = Text.assemble((self.op, f"bold {WHITE}"), "     ")
+        t = Text.assemble((self.op, f"bold {WHITE}"),
+                          (f" for {self.target_model.split('/')[-1]}" if self.target_model else "", DIM), "     ")
         cur = STAGES.index(self.stage)
         for i, s in enumerate(STAGES):
             t.append(f"{'●' if i <= cur else '○'} {s}", style=f"bold {WHITE}" if i == cur else INK if i < cur else FAINT)
@@ -824,10 +1089,14 @@ class KitchenScreen(Screen):
                     item.feedback = judge.feedback(item.verdict)
                 start = {"id": f"{item.run or 'golden'}:{item.attempt or item.op}", "kernel": item.kernel.to_json(),
                          "verdict": item.verdict, "feedback": item.feedback}
+            tgt = None
+            if self.target_model:  # reads the model's sizes and number format, like `carmen run --for`
+                from . import target
+                tgt = target.resolve(self.op, self.target_model).to_json()
             sm = loop.run(self.op, rounds=self.rounds, k=self.k, model=app.model, backend=app.backend,
                           runs_dir=app.runs_dir, memory_dir=app.memory_dir, peak=judge.peak_gbps(app.backend),
                           on_event=lambda t, d: app.call_from_thread(self.on_loop_event, t, d), start=start,
-                          should_stop=lambda: self.stop_requested)
+                          should_stop=lambda: self.stop_requested, target=tgt)
             app.call_from_thread(self.on_loop_done, sm, None)
         except carmy.CarmyAuthError as e:
             app.call_from_thread(self.on_loop_done, None, f"{e}. Run `carmen key` in a terminal to replace it.")

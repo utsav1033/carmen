@@ -21,6 +21,9 @@ ALIASES = {
     "qwen0.5b": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
     "llama1b": "mlx-community/Llama-3.2-1B-Instruct-4bit",
     "qwen3b": "mlx-community/Qwen2.5-3B-Instruct-4bit",
+    "qwen1.5b": "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
+    "llama3b": "mlx-community/Llama-3.2-3B-Instruct-4bit",
+    "qwen7b": "mlx-community/Qwen2.5-7B-Instruct-4bit",
 }
 
 # Ops whose rows are tokens and whose row length is the model's hidden size.
