@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/banner.svg" alt="carmen: let the model cook. trust nothing it can't prove." width="100%">
+  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/banner.png" alt="A pencil-and-ink sketch: a chef's knife has just diced a GPU chip into small tiles on a cutting board. Beside it, hand-lettered: carmen. Let the model cook. Trust nothing it can't prove." width="100%">
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ AI-written kernels. carmen asks: *can an AI make a real model on my Mac faster, 
 
 ## How carmen works
 
-<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/loop.png" alt="The AI writes a kernel and sends the code to the judge. The judge checks it is right on hundreds of inputs including secret ones, faster than Apple's MLX, and still fast inside a real model. Failures go back to the AI with exactly where the kernel is wrong. Passing kernels become the champion, and the next round improves on it." width="90%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="carmen, the map. Left, the kernel factory: the op spec defines what to compute; Carmy, the LLM, writes kernel code; the judge checks it is correct on hundreds of inputs including secret ones, faster than MLX and mx.compile, and still fast in the model; failures go back with where and why, passing kernels become the champion, proven lessons go to the playbook, and the next round makes one change to the champion. Right, the measurement side: carmen speedup, levers and profile all run on a real model (Qwen via mlx-lm), taking turns with stock. The finding: a kernel the judge proves faster can still do nothing for the model; only the measurement side shows it." width="95%"></p>
 
 **The writer can't grade itself.** Carmy (an LLM) returns kernel source and nothing else: no tools, no access to
 the tests or the timer. Everything it learns comes from the judge's verdicts.
@@ -170,4 +170,4 @@ From source: `git clone https://github.com/utsav1033/carmen`, then `pip install 
 
 [Measuring the Checker](https://arxiv.org/abs/2609.22220) · [Gaming Without an Attacker](https://arxiv.org/abs/2608.08722) · [Metal-Sci](https://arxiv.org/abs/2605.09708) · [Hacker-Fixer Loops](https://arxiv.org/abs/2606.08960) · [Test-Input Generation for Tensor Programs](https://arxiv.org/abs/2606.27396) · [Reward Hacking in Self-Improving Code Agents](https://openreview.net/forum?id=ikrQWGgxYg) · [Meta-Harness](https://arxiv.org/abs/2603.28052) · [Auditing Harness Tampering](https://arxiv.org/abs/2609.00069) · [SoL-Pi](https://arxiv.org/abs/2609.20519) · [SAGE](https://arxiv.org/abs/2609.35568) · [Prime Agent](https://arxiv.org/abs/2608.23552) · [KernelBench-Verified](https://github.com/facebookresearch/kernel_bench_verified) · [Contract-Grade Verifier](https://github.com/RishiShah99/lethe) · [Building a C compiler with parallel Claudes](https://www.anthropic.com/engineering/building-c-compiler)
 
-<sub>Named after Carmen "Carmy" Berzatto. Yes, chef. Banner set in Space Grotesk and JetBrains Mono (SIL Open Font License). Diagrams drawn with rough.js in Virgil (Excalidraw's font, OFL).</sub>
+<sub>Named after Carmen "Carmy" Berzatto. Yes, chef. Banner hand-drawn with rough.js, lettered in Caveat (SIL Open Font License). Diagrams drawn with rough.js in Virgil (Excalidraw's font, OFL).</sub>
