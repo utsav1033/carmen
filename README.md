@@ -8,7 +8,20 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/utsav1033/carmen/actions/workflows/tests.yml"><img src="https://github.com/utsav1033/carmen/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+  <a href="https://pypi.org/project/carmen-kernels/"><img src="https://img.shields.io/pypi/v/carmen-kernels?style=flat-square&color=262626&label=pip%20install%20carmen-kernels" alt="PyPI: pip install carmen-kernels"></a>
+  <a href="https://github.com/utsav1033/carmen/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/utsav1033/carmen/tests.yml?branch=main&style=flat-square&label=tests" alt="tests"></a>
+  <img src="https://img.shields.io/badge/Apple%20Silicon-M1%E2%80%93M4-262626?style=flat-square&logo=apple&logoColor=white" alt="runs on Apple Silicon">
+  <img src="https://img.shields.io/badge/python-3.10%2B-262626?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/measuring-no%20API%20key-2f9e44?style=flat-square" alt="measuring needs no API key">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-262626?style=flat-square" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#try-it"><b>Try it</b></a> ·
+  <a href="#the-problem">The problem</a> ·
+  <a href="#how-carmen-works">How it works</a> ·
+  <a href="#results">Results</a> ·
+  <a href="#what-i-learned">What I learned</a>
 </p>
 
 ## The short version
