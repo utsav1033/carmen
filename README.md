@@ -8,7 +8,6 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/carmen-kernels/"><img src="https://img.shields.io/pypi/v/carmen-kernels?style=flat-square&color=262626&label=pip%20install%20carmen-kernels" alt="PyPI: pip install carmen-kernels"></a>
   <a href="https://github.com/utsav1033/carmen/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/utsav1033/carmen/tests.yml?branch=main&style=flat-square&label=tests" alt="tests"></a>
   <img src="https://img.shields.io/badge/Apple%20Silicon-M1%E2%80%93M4-262626?style=flat-square&logo=apple&logoColor=white" alt="runs on Apple Silicon">
   <img src="https://img.shields.io/badge/python-3.10%2B-262626?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+">
