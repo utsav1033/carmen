@@ -44,7 +44,7 @@ I wanted to know if an LLM could make a model on my Mac faster, and prove it.
 
 ## How carmen works
 
-<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="carmen, the map. Left, writing and testing kernels: the task says what to compute; Claude writes the kernel and sends back code only; carmen's tests check it is correct on hundreds of inputs including ones Claude never sees, faster than MLX and mx.compile, and still fast in the model; failures go back saying where and why, the fastest correct kernel is kept, tips the tests proved go into a playbook, and the next round makes one change. Right, measuring the real model: carmen speedup, levers and profile run on Qwen via mlx-lm, taking turns with stock. What I found: a kernel that tests faster can still do nothing for the model." width="95%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="How carmen works: the task says what to compute and what the exact answer is. Claude writes the kernel and sends back code only. carmen's tests check it is correct on hundreds of inputs, including ones Claude never sees, faster than MLX and mx.compile, and still fast in the model. A failure goes back to Claude with where and why; a pass becomes the champion, the fastest correct kernel so far. Tips the tests proved go into a playbook, and the next round makes one change to the champion." width="75%"></p>
 
 1. **Claude writes a kernel** in Metal, Apple's GPU language. It only sends back code and never runs the tests itself.
 2. **carmen tests it** on hundreds of inputs (odd sizes, huge values, and a set Claude never sees) against an exact answer
