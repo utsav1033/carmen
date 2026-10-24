@@ -212,7 +212,7 @@ def code_view(item: Item) -> Syntax:
 
 CSS = f"""
 Screen {{ background: {BG}; color: {INK}; }}
-.pane {{ background: {PANEL}; border: round {EDGE}; border-title-color: {DIM}; border-subtitle-color: {FAINT};
+.pane {{ background: {PANEL}; border: round {EDGE}; border-title-color: {INK}; border-subtitle-color: {DIM};
          padding: 0 1; }}
 .pane:focus-within {{ border: round {EDGE_HI}; }}
 #top {{ height: 8; padding: 1 2 0 2; }}
@@ -221,15 +221,16 @@ Screen {{ background: {BG}; color: {INK}; }}
 Footer, FooterKey {{ background: {BG}; }}
 FooterKey .footer-key--key {{ color: {WHITE}; background: {BG}; text-style: bold; }}
 FooterKey .footer-key--description {{ color: {DIM}; background: {BG}; }}
-OptionList {{ background: {PANEL}; border: round {EDGE}; padding: 1 1; }}
+OptionList {{ background: {PANEL}; border: round {EDGE}; padding: 1 1; border-title-color: {INK};
+              border-subtitle-color: {DIM}; }}
+Carmen.short #top {{ display: none; }}
 OptionList:focus {{ border: round {EDGE_HI}; }}
 OptionList > .option-list--option-highlighted {{ background: #1c1c20; color: {WHITE}; text-style: bold; }}
 OptionList:focus > .option-list--option-highlighted {{ background: #26262b; color: {WHITE}; text-style: bold; }}
 #proven {{ margin: 1 2 0 2; height: auto; padding: 0 1; border: round {GREEN}; }}
 #ops {{ margin: 1 2 0 2; height: auto; max-height: 45%; }}
 #mid {{ height: auto; margin: 1 2 0 2; }}
-#models {{ width: 3fr; height: 10; margin: 0; padding: 0 1; }}
-#how {{ width: 2fr; height: 10; margin-left: 1; padding: 0 2; }}
+#models {{ width: 1fr; height: 10; margin: 0; padding: 0 1; }}
 #modelrow {{ height: 1fr; margin: 1 2 0 2; }}
 #modelinfo {{ width: 1fr; height: 100%; padding: 1 2; }}
 #actions {{ width: 1fr; height: 100%; margin-left: 1; padding: 1 1; }}
@@ -322,22 +323,20 @@ def proven_text() -> Group:
     return Group(g, Text(""), foot)
 
 
-HOW = Text.assemble(
-    ("An AI (", INK), ("Carmy", f"bold {WHITE}"), (") writes GPU kernels for Apple chips. A ", INK),
-    ("judge", f"bold {WHITE}"), (" proves each one on inputs it never saw and races it against MLX.\n\n", INK),
-    ("┌─→ ", GREEN), ("1 draft", f"bold {WHITE}"), ("  2 judge", f"bold {WHITE}"), ("  3 keep", f"bold {WHITE}"),
-    ("  4 learn\n", f"bold {WHITE}"),
-    ("└── ", GREEN), ("each round builds on the best proven kernel\n\n", DIM),
-    ("The winners go into a real model and get measured there too.", DIM),
-)
-
-
 def model_status(model_id: str, runs_dir: Path) -> Text:
-    """What's known about a model: measured on this Mac first, else what carmen published."""
+    """One headline per model, so a row fits a small terminal: the best thing measured on this Mac
+    (the model page has the rest), else what carmen published."""
     from . import catalog, champions
-    mine = catalog.summary(model_id, runs_dir)
-    if mine:
-        return Text(mine, style=INK)
+    got = catalog.measured(model_id, runs_dir)
+    best = [(x, f"{name} {x:.2f}×" + (f" @{ctx // 1024}k" if ctx >= 1024 else ""))
+            for lever, name in (("spec", "spec"), ("kv8", "kv8"))
+            for ctx, x in got.get(lever, {}).items()
+            if got.get("quality", {}).get(lever, {}).get(ctx, 1.0) >= 0.9]
+    if "fusion" in got:
+        best.append((got["fusion"], f"carmen {got['fusion']:.2f}×"))
+    if best:
+        x, label = max(best)
+        return Text(label, style=f"bold {GREEN}" if x > 1.01 else INK)
     pub = next((r for r in champions.results() if r["model"] == model_id), None)
     if pub:
         return Text.assemble((f"carmen kernels {pub['decode_vs_stock']:.2f}× ", f"bold {GREEN}"), ("published", DIM))
@@ -393,7 +392,6 @@ class HomeScreen(Screen):
         yield Static(proven_text(), id="proven", classes="pane")
         with Horizontal(id="mid"):
             yield OptionList(id="models")
-            yield Static(HOW, id="how", classes="pane")
         with Horizontal(id="below"):
             yield OptionList(id="ops")
             yield Static("", id="about", classes="pane")
@@ -402,10 +400,9 @@ class HomeScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#proven").border_title = "proven so far"
         self.query_one("#models").border_title = "speed up a model"
-        self.query_one("#how").border_title = "how it works"
         self.query_one("#ops").border_title = "kernels"
         self.query_one("#about").border_title = "about this kernel"
-        self.query_one("#models").border_subtitle = "↓ downloads on first use · fits = enough memory on this Mac"
+        self.query_one("#models").border_subtitle = "↓ = downloads on first use"
         self.refresh_models()
         self.refresh_ops()
 
@@ -672,30 +669,30 @@ def model_info(m, runs_dir: Path) -> Text:
         fit1, c1 = FIT[catalog.fits(m.gb)]
         fit3, c3 = FIT[catalog.fits(m.gb, catalog.SPEEDUP_COPIES)]
         t.append_text(Text.assemble(("size      ", FAINT), (f"{m.gb:.2f} GB, read once for every word it writes\n", INK),
-                                    ("memory    ", FAINT), (f"{catalog.ram_gb():.0f} GB on this Mac · ", INK),
-                                    ("levers ", DIM), (fit1 or "?", c1), ("  speedup ", DIM), (fit3 or "?", c3),
-                                    (f" (loads {catalog.SPEEDUP_COPIES} copies)\n", DIM)))
+                                    ("memory    ", FAINT), (f"{catalog.ram_gb():.0f} GB · ", INK),
+                                    ("levers ", DIM), (fit1 or "?", c1), ("  speedup ", DIM), (fit3 or "?", c3), ("\n", "")))
     t.append_text(Text.assemble(("download  ", FAINT), ("on disk\n" if catalog.downloaded(m.id) else
                                                        f"downloads {m.gb:.2f} GB on first use\n" if m.gb else
                                                        "downloads on first use\n", INK)))
     draft = levers.default_draft(m.id)
-    t.append_text(Text.assemble(("spec      ", FAINT), (f"draft model {draft.split('/')[-1]}\n" if draft else
-                                                       "no draft model known for this family\n", INK)))
+    t.append_text(Text.assemble(("draft     ", FAINT), (f"{draft.split('/')[-1]}\n" if draft else
+                                                       "none known for this family\n", INK)))
     got = catalog.measured(m.id, runs_dir)
     t.append("\nmeasured on this Mac\n", style=DIM)
     if not got:
-        t.append("  nothing yet: run speedup or levers below\n", style=FAINT)
+        t.append("  nothing yet: run speedup or levers\n", style=FAINT)
     if "fusion" in got:
-        t.append_text(Text.assemble(("  " + "carmen's kernels".ljust(22), INK), speed(got["fusion"]), (" vs stock\n", DIM)))
-    for lever, name in (("spec", "speculative decoding"), ("kv8", "8-bit KV cache"), ("kv4", "4-bit KV cache")):
+        t.append_text(Text.assemble(("  " + "carmen's kernels".ljust(17), INK), speed(got["fusion"]), ("\n", "")))
+    for lever, name in (("spec", "spec decoding"), ("kv8", "8-bit KV cache"), ("kv4", "4-bit KV cache")):
         for ctx, x in sorted(got.get(lever, {}).items()):
-            t.append_text(Text.assemble((f"  {name:<22}", INK), speed(x), (f" at a {ctx:,}-token prompt", DIM)))
+            t.append_text(Text.assemble((f"  {name:<17}", INK), speed(x), (f"  @{ctx // 1024}k" if ctx >= 1024 else
+                                                                           f"  @{ctx}", DIM)))
             top1 = got.get("quality", {}).get(lever, {}).get(ctx)
             if top1 is not None and top1 < 0.9:  # fast but wrong is not a win
-                t.append(f"  ✗ broken output ({top1:.0%} match)", style=f"bold {RED}")
+                t.append("  ✗ broken output", style=f"bold {RED}")
             t.append("\n")
     if "limit_share" in got:
-        t.append_text(Text.assemble(("  stock MLX runs at ", DIM), (f"{got['limit_share']:.0%}", f"bold {WHITE}"),
+        t.append_text(Text.assemble(("  stock at ", DIM), (f"{got['limit_share']:.0%}", f"bold {WHITE}"),
                                     (" of the memory speed limit", DIM)))
     if m.note:
         t.append(f"\n\n{m.note}", style=INK)
@@ -726,16 +723,15 @@ class ModelScreen(Screen):
         self.query_one("#modelinfo").border_title = "this model"
         self.query_one("#actions").border_title = "what carmen can do"
         acts = self.query_one("#actions", OptionList)
-        acts.add_option(Option(Text.assemble(("measure, no API key\n", f"bold {DIM}")), disabled=True))
-        acts.add_option(Option(Text.assemble(("  speedup  ", f"bold {WHITE}"),
-                                             ("carmen's fused kernels vs stock MLX vs mx.compile", INK)), id="speedup"))
-        acts.add_option(Option(Text.assemble(("  levers   ", f"bold {WHITE}"),
-                                             ("speculative decoding and an 8-bit KV cache vs stock", INK)), id="levers"))
-        acts.add_option(Option(Text.assemble(("\ncook a kernel for this model's exact shapes · needs an API key",
-                                              f"bold {DIM}")), disabled=True))
+        acts.add_option(Option(Text("measure · no API key", style=f"bold {DIM}"), disabled=True))
+        acts.add_option(Option(Text.assemble(("  speedup  ", f"bold {WHITE}"), ("carmen's kernels vs stock", INK)),
+                               id="speedup"))
+        acts.add_option(Option(Text.assemble(("  levers   ", f"bold {WHITE}"), ("spec decoding, 8-bit KV cache", INK)),
+                               id="levers"))
+        acts.add_option(Option(Text("\ncook for this model · needs API key", style=f"bold {DIM}"), disabled=True))
         for op in target.TARGETABLE:
             acts.add_option(Option(Text.assemble((f"  {op:<17}", f"bold {WHITE}"),
-                                                 (_clip(ops.OPS[op].summary, 40), INK)), id=f"cook:{op}"))
+                                                 (_clip(ops.OPS[op].summary, 26), INK)), id=f"cook:{op}"))
         acts.highlighted = 1
         self.refresh_info()
 
@@ -1367,6 +1363,9 @@ class HistoryScreen(Screen):
 
 
 # ── app ──────────────────────────────────────────────────────────────────────────
+SHORT_ROWS = 44
+
+
 class Carmen(App):
     TITLE = "carmen"
     CSS = CSS
@@ -1379,6 +1378,10 @@ class Carmen(App):
 
     def on_mount(self) -> None:
         self.push_screen(HomeScreen())
+        self.set_class(self.size.height < SHORT_ROWS, "short")
+
+    def on_resize(self, event) -> None:
+        self.set_class(event.size.height < SHORT_ROWS, "short")  # the logo gives its rows to content
 
 
 def main(backend: str = "metal", runs_dir: str = "runs", memory_dir: str = "memory",

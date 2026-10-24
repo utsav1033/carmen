@@ -99,7 +99,7 @@ def test_models_open_a_model_page_with_measure_and_cook_actions(tmp_path, monkey
             await pilot.pause()
             assert isinstance(app.screen, ModelScreen) and app.screen.m.alias == "llama3b"
             info = str(app.screen.query_one("#modelinfo").render())
-            assert "1.81 GB" in info and "draft model Llama-3.2-1B-Instruct-4bit" in info
+            assert "1.81 GB" in info and "Llama-3.2-1B-Instruct-4bit" in info
             acts = app.screen.query_one("#actions")
             act_ids = [acts.get_option_at_index(i).id for i in range(acts.option_count)]
             assert {"speedup", "levers"} <= set(act_ids)
