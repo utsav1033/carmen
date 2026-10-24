@@ -34,11 +34,13 @@
 
 ## The problem
 
-LLMs can write GPU kernels, but a kernel can look right and still be wrong: it skips the last element of a row,
-loses precision, or only works on square matrices. The usual test runs one input size with a loose tolerance and
-misses a lot of this ([78.6% of precision bugs in one study](https://arxiv.org/abs/2609.22220)). And a kernel that's
-faster on its own may not make the model any faster. I wanted to know if an LLM could make a model on my Mac faster,
-and prove it.
+LLMs can write GPU kernels, but a kernel can pass a quick test and still be wrong. Most AI-kernel benchmarks try a
+single input and accept any answer that's roughly close. So a kernel that works on 1,024 numbers but forgets the last
+one when there are 1,025, or one whose answers are slightly off, still counts as correct
+([one study found this kind of check misses most precision bugs](https://arxiv.org/abs/2609.22220)).
+
+And even a kernel that really is correct and faster on its own may not make the model any faster.
+I wanted to know if an LLM could make a model on my Mac faster, and prove it.
 
 ## How carmen works
 
