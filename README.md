@@ -66,29 +66,34 @@ One M4 MacBook Pro (16 GB), MLX 0.32, greedy decoding, paired runs. Brackets are
 
 **Single kernels** win where MLX runs several small kernels, and lose where Apple hand-tuned one:
 
-| kernel | vs MLX | vs `mx.compile` |
-|---|---|---|
-| masked softmax | **1.82×** | **1.38×** |
-| add + rmsnorm | **1.41×** | **1.43×** |
-| matmul · attention | 0.93× · 0.54× | |
+| kernel | MLX | carmen | speedup |
+|---|---|---|---|
+| masked softmax | 3 kernels | 1 fused kernel | **1.82×** |
+| add + rmsnorm | 2 kernels | 1 fused kernel | **1.41×** |
+| matmul | Apple's tuned kernel | 1 kernel | 0.93× |
+| attention | Apple's tuned kernel | 1 kernel | 0.54× |
+
+Against MLX's own automatic fusion (`mx.compile`), the first two are still 1.38× and 1.43×.
 
 **In real models,** carmen's fused MLP kernels (tuned on 0.5B) mostly disappear, because stock MLX is already near the memory limit:
 
-| Qwen 2.5, 4-bit | carmen's kernels | stock vs memory limit |
-|---|---|---|
-| 0.5B | **1.02×** [1.01–1.02] | 64% |
-| 1.5B | 0.93× [0.93–0.95] | 87% |
-| 3B | 0.95× [0.93–0.97] | 97% |
+| Qwen 2.5, 4-bit | MLX | carmen | speedup | MLX vs memory limit |
+|---|---|---|---|---|
+| 0.5B | 214 tok/s | 220 tok/s | **1.02×** | 64% |
+| 1.5B | 94 tok/s | 87 tok/s | 0.93× | 87% |
+| 3B | 44 tok/s | 42 tok/s | 0.95× | 97% |
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
 **What reads fewer bytes per word does help:**
 
-| technique | model | 512 tokens | 8k tokens | output |
+Decode speed in tokens per second, stock MLX → with the technique:
+
+| technique | model | 512-token prompt | 8k-token prompt | output |
 |---|---|---|---|---|
-| speculative decoding | 3B | **1.24×** | **1.48×** | same as stock |
-| | 7B | **1.19×** | **1.13×** | same as stock |
-| 8-bit KV cache | 3B | 0.93× | 0.86× | 98–99% same |
+| speculative decoding | 3B | 51.8 → 64.7 · **1.24×** | 44.5 → 66.0 · **1.48×** | same as stock |
+| | 7B | 24.1 → 28.6 · **1.19×** | 22.1 → 24.8 · **1.13×** | same as stock |
+| 8-bit KV cache | 3B | 51.8 → 48.7 · 0.93× | 44.5 → 37.8 · 0.86× | 98–99% same |
 | 4-bit KV cache | 3B | | | broken |
 
 <details>
