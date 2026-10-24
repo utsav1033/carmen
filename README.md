@@ -75,13 +75,17 @@ One M4 MacBook Pro (16 GB), MLX 0.32, greedy decoding, paired runs. Brackets are
 
 Against MLX's own automatic fusion (`mx.compile`), the first two are still 1.38× and 1.43×.
 
-**In real models,** carmen's fused MLP kernels (tuned on 0.5B) mostly disappear, because stock MLX is already near the memory limit:
+**In real models,** carmen's fused MLP kernels (tuned on 0.5B) mostly disappear, because MLX is already close to the fastest the Mac can go:
 
-| Qwen 2.5, 4-bit | MLX | carmen | speedup | MLX vs memory limit |
+| Qwen 2.5, 4-bit | MLX | carmen | speedup | fastest possible* |
 |---|---|---|---|---|
-| 0.5B | 214 tok/s | 220 tok/s | **1.02×** | 64% |
-| 1.5B | 94 tok/s | 87 tok/s | 0.93× | 87% |
-| 3B | 44 tok/s | 42 tok/s | 0.95× | 97% |
+| 0.5B | 214 tok/s | 220 tok/s | **1.02×** | ~337 tok/s |
+| 1.5B | 94 tok/s | 87 tok/s | 0.93× | ~108 tok/s |
+| 3B | 44 tok/s | 42 tok/s | 0.95× | ~53 tok/s |
+
+<sub>*Each new word means reading all of the model's weights from memory once. My M4 reads about 94 GB/s, so a 1.74 GB
+model (3B) can't go much past ~53 words per second, however good the kernels are. MLX is already at 44 of 53; on 0.5B it's
+at 214 of 337, which is where carmen's kernels still had room.</sub>
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
@@ -102,7 +106,7 @@ Decode speed in tokens per second, stock MLX → with the technique:
 - Speculative decoding beats the speed limit (66 vs ~46 tok/s on 3B at 8k) because it reads the weights once for several words. It helps less on 7B because the 0.5B draft is accepted less often (46–52% of words vs 57–71%).
 - The 8-bit KV cache is slower because MLX runs attention on it as four separate steps instead of one fused kernel. That's carmen's next target.
 - The 4-bit KV cache turns Qwen's output into gibberish ("The skyuser\nquiv"): its attention keys have outliers 4 bits can't hold.
-- The memory limit uses the measured ~94 GB/s, which is conservative (stock 7B measures 103–105% of it). Read the percentages as "how close to the wall".
+- The "fastest possible" figures use my measured ~94 GB/s, which is a bit low (7B actually runs slightly faster than its figure), so treat them as approximate.
 - Spec output matches stock until a late fp16 rounding flip, as expected when the big model checks words in a batch.
 
 </details>
