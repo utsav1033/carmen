@@ -17,6 +17,7 @@
 
 <p align="center">
   <a href="#tldr">TL;DR</a> ·
+  <a href="#what-it-looks-like">What it looks like</a> ·
   <a href="#try-it"><b>Try it</b></a> ·
   <a href="#the-problem">The problem</a> ·
   <a href="#how-carmen-works">How it works</a> ·
@@ -31,6 +32,15 @@
 - Reading less memory per word did help: **speculative decoding, a feature mlx-lm already has, made Qwen 3B 1.48× faster** at an 8k prompt, with the same output. carmen measured it; it didn't invent it.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
+
+## What it looks like
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-home.webp" alt="carmen's terminal app, home screen: what's been proven so far (1.03× decode on Qwen 0.5B, 75/75 planted bugs caught, 1.82× vs MLX on masked softmax), a list of models with their size, whether they fit this Mac and the best result measured on each, and the kernels carmen has written with their speedups" width="49%">
+  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-model.webp" alt="carmen's model page for Qwen 2.5 3B: size, memory fit, the draft model, and everything measured on this Mac (speculative decoding 1.24× and 1.48×, 8-bit KV cache 0.93× and 0.86×, 4-bit KV cache marked broken output), next to what carmen can do: measure speedup or levers, or cook a kernel for this model's shapes" width="49%">
+</p>
+
+Run `carmen`, press `m`, pick a model: it shows what's been measured on it and what you can run, no API key needed.
 
 ## The problem
 
