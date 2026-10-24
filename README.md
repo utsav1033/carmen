@@ -3,8 +3,8 @@
 </p>
 
 <p align="center">
-  <b>An AI writes GPU kernels for Apple Silicon. A strict judge checks every one.<br>
-  Then I measured what actually makes a model on a Mac faster.</b>
+  <b>An LLM writes GPU kernels for Apple Silicon and carmen tests every one.<br>
+  Then it measures whether a real model on a Mac actually gets faster.</b>
 </p>
 
 <p align="center">
@@ -26,26 +26,34 @@
 
 ## TL;DR
 
-- An AI wrote Metal kernels up to **1.8× faster than Apple's MLX**, and a strict judge proved them correct.
-- In real models they barely matter: **+2%** on Qwen 0.5B, **5–7% slower** on 1.5B and 3B, because MLX already runs 3B+ at the memory-bandwidth limit.
-- What helps is reading less memory per token: **speculative decoding, 1.48×** on Qwen 3B at 8k context, same output.
+- Claude wrote Metal kernels up to **1.8× faster than Apple's MLX** on single operations, checked on hundreds of inputs.
+- In real models they barely helped: **+2%** on Qwen 0.5B, **5–7% slower** on 1.5B and 3B. MLX already runs those models about as fast as the Mac's memory allows.
+- Reading less memory per word did help: **speculative decoding made Qwen 3B 1.48× faster** at an 8k prompt, with the same output.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
 
 ## The problem
 
-AI can write GPU kernels now, but its kernels are often quietly wrong ([the usual check misses 78.6% of precision bugs](https://arxiv.org/abs/2609.22220)),
-search loops game their own benchmarks ([30% of Metal "wins" broke on unseen configs](https://arxiv.org/abs/2608.08722)),
-and a kernel that's faster alone can do nothing for a model that's already limited by memory. carmen asks:
-*can an AI make a real model on my Mac faster, with proof?*
+LLMs can write GPU kernels, but a kernel can look right and still be wrong: it skips the last element of a row,
+loses precision, or only works on square matrices. The usual test runs one input size with a loose tolerance and
+misses a lot of this ([78.6% of precision bugs in one study](https://arxiv.org/abs/2609.22220)). And a kernel that's
+faster on its own may not make the model any faster. I wanted to know if an LLM could make a model on my Mac faster,
+and prove it.
 
 ## How carmen works
 
-<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="carmen, the map. Left, the kernel factory: the op spec defines what to compute; Carmy, the LLM, writes kernel code; the judge checks it is correct on hundreds of inputs including secret ones, faster than MLX and mx.compile, and still fast in the model; failures go back with where and why, passing kernels become the champion, proven lessons go to the playbook, and the next round makes one change to the champion. Right, the measurement side: carmen speedup, levers and profile all run on a real model (Qwen via mlx-lm), taking turns with stock. The finding: a kernel the judge proves faster can still do nothing for the model; only the measurement side shows it." width="95%"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="carmen, the map. Left, writing and testing kernels: the task says what to compute; Claude writes the kernel and sends back code only; carmen's tests check it is correct on hundreds of inputs including ones Claude never sees, faster than MLX and mx.compile, and still fast in the model; failures go back saying where and why, the fastest correct kernel is kept, tips the tests proved go into a playbook, and the next round makes one change. Right, measuring the real model: carmen speedup, levers and profile run on Qwen via mlx-lm, taking turns with stock. What I found: a kernel that tests faster can still do nothing for the model." width="95%"></p>
 
-- **The writer can't grade itself:** the LLM returns kernel source only. No tools, no access to the tests.
-- **The judge is strict and partly secret:** a float64 answer key on hundreds of inputs, edge sizes, races, writes past the end, a hidden set the model never sees, and timing against MLX and `mx.compile`. It caught **75/75** planted bugs; the usual check caught 40. [More →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
-- **Then it measures the real model,** taking turns with stock run by run, and checks the output still matches.
+1. **Claude writes a kernel** in Metal, Apple's GPU language. It only sends back code and never runs the tests itself.
+2. **carmen tests it** on hundreds of inputs (odd sizes, huge values, and a set Claude never sees) against an exact answer
+   computed in float64. It also checks for missing writes, writes past the end of the output, and race conditions.
+3. **If it's wrong, Claude is told where** ("the last column of every row is NaN") and tries again. If it's right, it's
+   timed against MLX. The fastest correct kernel is kept, and the next round tries to improve on it.
+4. **The winners go into a real model** (Qwen, through mlx-lm), run back and forth against stock MLX, to see whether the
+   model actually got faster and still writes the same words.
+
+To check the tests themselves, I planted 75 realistic bugs in correct kernels. carmen caught all 75; the usual one-size
+check caught 40. [How the testing works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
 
 ## Results
 
@@ -94,7 +102,7 @@ One M4 MacBook Pro (16 GB), MLX 0.32, greedy decoding, paired runs. Brackets are
 - AI kernels don't beat hand-tuned code. They beat code nobody fused.
 - A kernel that wins alone can lose inside a model.
 - Past ~1B parameters, memory is the limit, not kernels.
-- Measuring honestly took more work than writing kernels.
+- Getting numbers I could trust took more work than writing the kernels.
 
 New to this? [How it all works](https://github.com/utsav1033/carmen/blob/main/docs/how-it-works.md) explains LLMs, GPUs and kernels from scratch.
 
@@ -119,9 +127,9 @@ carmen key                          # only to cook new kernels: paste an Anthrop
 | `carmen` | the terminal app: what's proven, speed up a model, pick a kernel, watch it cook |
 | `carmen speedup [models…]` | stock MLX vs `mx.compile` vs carmen's bundled kernels on real models, taking turns; no API key (`--quick` for ~2 min a model) |
 | `carmen levers [model]` | speculative decoding, 8/4-bit KV cache and 3-bit weights vs stock, at 512 and 8k prompts, with drift scored for the lossy ones; no API key |
-| `carmen run <op> [--for qwen0.5b]` | let the AI cook one kernel; `--for` judges it at a real model's sizes |
-| `carmen broken <op>` | plant bugs and check the judge catches every one, next to the standard one-size check |
-| `carmen judge <op> <file>` | judge a kernel you wrote |
+| `carmen run <op> [--for qwen0.5b]` | let Claude write one kernel; `--for` tests it at a real model's sizes |
+| `carmen broken <op>` | plant bugs and check carmen's tests catch every one, next to the usual one-size check |
+| `carmen judge <op> <file>` | test a kernel you wrote |
 | `carmen e2e [model]` | run a real model stock vs with carmen's kernels: speed, noise range, same answers? |
 | `carmen profile [model]` | where a model spends its time, step by step |
 | `carmen bench` | the feedback loop vs plain best-of-N, same budget |
