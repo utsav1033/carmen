@@ -46,16 +46,19 @@ I wanted to know if an LLM could make a model on my Mac faster, and prove it.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/map.png" alt="How carmen works: the task says what to compute and what the exact answer is. Claude writes the kernel and sends back code only. carmen's tests check it is correct on hundreds of inputs, including ones Claude never sees, faster than MLX and mx.compile, and still fast in the model. A failure goes back to Claude with where and why; a pass becomes the champion, the fastest correct kernel so far. Tips the tests proved go into a playbook, and the next round makes one change to the champion." width="75%"></p>
 
-1. **Claude writes a kernel** in Metal, Apple's GPU language. It only sends back code and never runs the tests itself.
-2. **carmen tests it** on hundreds of inputs (odd sizes, huge values, and a set Claude never sees) against an exact answer
-   computed in float64. It also checks for missing writes, writes past the end of the output, and race conditions.
-3. **If it's wrong, Claude is told where** ("the last column of every row is NaN") and tries again. If it's right, it's
-   timed against MLX. The fastest correct kernel is kept, and the next round tries to improve on it.
-4. **The winners go into a real model** (Qwen, through mlx-lm), run back and forth against stock MLX, to see whether the
-   model actually got faster and still writes the same words.
+At its core it's a loop: Claude writes a Metal kernel, carmen tests it, and the fastest correct one is kept and
+improved. Plenty of projects do that. The difference is that carmen doesn't trust the loop, because a plain loop
+fools itself in three ways:
 
-To check the tests themselves, I planted 75 realistic bugs in correct kernels. carmen caught all 75; the usual one-size
-check caught 40. [How the testing works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
+- **The tests miss bugs.** So carmen's tests are tested: I planted 75 realistic bugs in correct kernels.
+  carmen caught all 75; the usual one-input check caught 40. Failures tell Claude exactly where it went wrong.
+- **The model learns to pass the tests instead of being correct.** So part of the test set is hidden: inputs Claude
+  never sees, for correctness and for speed. Without that, [30% of LLM kernel "wins" on Metal broke](https://arxiv.org/abs/2608.08722)
+  on inputs nobody had tested.
+- **"Faster" doesn't mean the model gets faster.** So every win is timed against MLX's own fusion with error bars,
+  then checked again inside a real model. That's how carmen found that kernels which win on their own barely move Qwen at all.
+
+[How the testing works →](https://github.com/utsav1033/carmen/blob/main/docs/judge.md)
 
 ## Results
 
