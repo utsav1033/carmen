@@ -28,7 +28,7 @@
 
 - Claude wrote Metal kernels up to **1.8× faster than Apple's MLX** on single operations, checked on hundreds of inputs.
 - In real models they barely helped: **+2%** on Qwen 0.5B, **5–7% slower** on 1.5B and 3B. MLX already runs those models about as fast as the Mac's memory allows.
-- Reading less memory per word did help: **speculative decoding made Qwen 3B 1.48× faster** at an 8k prompt, with the same output.
+- Reading less memory per word did help: **speculative decoding, a feature mlx-lm already has, made Qwen 3B 1.48× faster** at an 8k prompt, with the same output. carmen measured it; it didn't invent it.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/spec-3b.png" alt="Qwen 2.5 3B on an M4 at 8k context: normal decoding 44.5 tokens/s, 8-bit KV cache 37.8, speculative decoding 66.0, above the ~46 tokens/s memory-bandwidth limit" width="85%"></p>
 
@@ -89,7 +89,7 @@ at 214 of 337, which is where carmen's kernels still had room.</sub>
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
-**What reads fewer bytes per word does help:**
+**What reads fewer bytes per word does help.** These are existing mlx-lm features, not carmen's: carmen turns them on and measures them the same way (`carmen levers`).
 
 Decode speed in tokens per second, stock MLX → with the technique:
 
