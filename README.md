@@ -28,7 +28,7 @@
 ## TL;DR
 
 - **Most AI-kernel results are graded by a check that misses a lot.** I planted 75 realistic bugs in GPU kernels: the usual check caught 40. carmen's tests caught all 75.
-- **With that grading, Claude's kernels were real wins on their own:** up to 1.8× faster than Apple's MLX.
+- **Kernels that passed those tests were real wins on their own.** Claude's masked softmax ran **1.82× faster** than Apple's MLX (MLX runs it as 3 separate steps, Claude's does it in 1), and add + rmsnorm **1.41×**.
 - **But in a real model they barely mattered:** +2–3% on Qwen 0.5B, nothing on bigger models, because MLX already reads the model's weights about as fast as the Mac allows. What did speed up bigger models was speculative decoding, an existing mlx-lm feature carmen measured: 1.48× on Qwen 3B.
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/bugs-caught.png" alt="75 bugs planted in GPU kernels: the usual one-input check caught 40 and let 35 slip through; carmen's tests caught all 75" width="90%"></p>
