@@ -101,6 +101,13 @@ model (3B) can't go much past ~53 words per second, however good the kernels are
 at 214 of 337, which is where carmen's kernels still had room.
 †This 3B run was on a busier Mac, so both sides are slower. The speedup compares them run by run, so it still holds.</sub>
 
+**Why fusion barely helped: Amdahl's law.** If you speed up only part of the work, the whole job gets faster only as
+much as that part allows: speeding up a fraction *p* of the time by *s* gives an overall speedup of 1 / ((1 − *p*) + *p*/*s*).
+
+- On **0.5B**, about 36% of each word's time is the part kernels can shrink (launches, small steps). Even making it free
+  would cap out around 1.56×. carmen's kernels got 1.02×.
+- On **3B**, that part is about 3%. Even infinitely fast kernels would give at most 1 / 0.97 ≈ **1.03×**.
+
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
 **What did make bigger models faster: speculative decoding.**
