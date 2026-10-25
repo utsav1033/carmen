@@ -75,9 +75,9 @@ fools itself in three ways:
 
 ## Results
 
-One M4 MacBook Pro (16 GB), MLX 0.32, greedy decoding, paired runs. Brackets are 95% confidence ranges.
+Everything here ran on my M4 MacBook Pro (16 GB). Numbers in brackets are the range the real value is 95% likely to be in.
 
-**Single kernels** win where MLX runs several small kernels, and lose where Apple hand-tuned one:
+**Single kernels.** Claude beat MLX where MLX splits the work into several small steps. On matmul and attention, which Apple has already tuned heavily, it lost:
 
 | kernel | MLX | carmen | speedup |
 |---|---|---|---|
