@@ -4,4 +4,4 @@ The model (Carmy) is the intelligence; the judge is the truth; correction is the
 between them, and memory is that loop's verified residue.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
