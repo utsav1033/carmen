@@ -35,10 +35,13 @@
 
 ## What it looks like
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-home.webp" alt="carmen's terminal app, home screen: what's been proven so far (1.03× decode on Qwen 0.5B, 75/75 planted bugs caught, 1.82× vs MLX on masked softmax), a list of models with their size, whether they fit this Mac and the best result measured on each, and the kernels carmen has written with their speedups" width="49%">
-  <img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-model.webp" alt="carmen's model page for Qwen 2.5 3B: size, memory fit, the draft model, and everything measured on this Mac (speculative decoding 1.24× and 1.48×, 8-bit KV cache 0.93× and 0.86×, 4-bit KV cache marked broken output), next to what carmen can do: measure speedup or levers, or cook a kernel for this model's shapes" width="49%">
-</p>
+**The home screen:** what's been proven, the models you can speed up, and the kernels carmen has written.
+
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-home.webp" alt="carmen's terminal app, home screen: what's been proven so far (1.03× decode on Qwen 0.5B, 75/75 planted bugs caught, 1.82× vs MLX on masked softmax), a list of models with their size, whether they fit this Mac and the best result measured on each, and the kernels carmen has written with their speedups" width="100%"></p>
+
+**A model's page** (Qwen 2.5 3B): everything measured on it, and what you can run.
+
+<p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/app-model.webp" alt="carmen's model page for Qwen 2.5 3B: size, memory fit, the draft model, and everything measured on this Mac (speculative decoding 1.24× and 1.48×, 8-bit KV cache 0.93× and 0.86×, 4-bit KV cache marked broken output), next to what carmen can do: measure speedup or levers, or cook a kernel for this model's shapes" width="100%"></p>
 
 Run `carmen`, press `m`, pick a model: it shows what's been measured on it and what you can run, no API key needed.
 
