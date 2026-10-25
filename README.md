@@ -102,7 +102,7 @@ at 214 of 337, which is where carmen's kernels still had room.</sub>
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
-**What reads fewer bytes per word does help.** These are existing mlx-lm features, not carmen's: carmen turns them on and measures them the same way (`carmen levers`).
+**What did make bigger models faster: speculative decoding.** A small model guesses the next few words and the big model checks them all in one go, so it reads its weights once for several words instead of once per word. That's a feature mlx-lm already has; carmen just measured it (`carmen levers`). It also tried compressing the cache the model keeps of the conversation so far (the KV cache), which made things slower or broke the output:
 
 Decode speed in tokens per second, stock MLX → with the technique:
 
