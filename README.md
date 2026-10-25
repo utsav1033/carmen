@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="#tldr">TL;DR</a> ·
-  <a href="#what-it-looks-like">What it looks like</a> ·
+  <a href="#the-cli">The CLI</a> ·
   <a href="#try-it"><b>Try it</b></a> ·
   <a href="#the-problem">The problem</a> ·
   <a href="#how-carmen-works">How it works</a> ·
@@ -33,7 +33,7 @@
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/bugs-caught.png" alt="75 bugs planted in GPU kernels: the usual one-input check caught 40 and let 35 slip through; carmen's tests caught all 75" width="90%"></p>
 
-## What it looks like
+## The CLI
 
 **The home screen:** what's been proven, the models you can speed up, and the kernels carmen has written.
 
