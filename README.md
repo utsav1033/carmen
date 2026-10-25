@@ -92,13 +92,14 @@ Against MLX's own automatic fusion (`mx.compile`), the first two are still 1.38�
 
 | Qwen 2.5, 4-bit | MLX | carmen | speedup | fastest possible* |
 |---|---|---|---|---|
-| 0.5B | 214 tok/s | 220 tok/s | **1.02×** | ~337 tok/s |
-| 1.5B | 94 tok/s | 87 tok/s | 0.93× | ~108 tok/s |
-| 3B | 44 tok/s | 42 tok/s | 0.95× | ~53 tok/s |
+| 0.5B | 214 tok/s | 220 tok/s | **1.02×** [1.01–1.02] | ~337 tok/s |
+| 1.5B | 94 tok/s | 87 tok/s | 0.93× [0.93–0.95] | ~108 tok/s |
+| 3B | 44 tok/s† | 42 tok/s | 0.95× [0.93–0.97] | ~53 tok/s |
 
 <sub>*Each new word means reading all of the model's weights from memory once. My M4 reads about 94 GB/s, so a 1.74 GB
-model (3B) can't go much past ~53 words per second, however good the kernels are. MLX is already at 44 of 53; on 0.5B it's
-at 214 of 337, which is where carmen's kernels still had room.</sub>
+model (3B) can't go much past ~53 words per second, however good the kernels are. On a quiet Mac MLX runs 3B at ~52 of 53; on 0.5B it's
+at 214 of 337, which is where carmen's kernels still had room.
+†This 3B run was on a busier Mac, so both sides are slower. The speedup compares them run by run, so it still holds.</sub>
 
 <p align="center"><img src="https://raw.githubusercontent.com/utsav1033/carmen/main/assets/speed-limit.png" alt="Stock MLX speed as a share of the memory-bandwidth limit: Qwen 0.5B 64%, 1.5B 87%, 3B 97%. Kernel fusion can only shrink the remaining part." width="85%"></p>
 
@@ -113,9 +114,10 @@ Decode speed in tokens per second, stock MLX → with the technique:
 
 | technique | model | 512-token prompt | 8k-token prompt | output |
 |---|---|---|---|---|
-| speculative decoding | 3B | 51.8 → 64.7 · **1.24×** | 44.5 → 66.0 · **1.48×** | same as stock |
-| | 7B | 24.1 → 28.6 · **1.19×** | 22.1 → 24.8 · **1.13×** | same as stock |
-| 8-bit KV cache | 3B | 51.8 → 48.7 · 0.93× | 44.5 → 37.8 · 0.86× | 98–99% same |
+| speculative decoding | 3B | 51.8 → 64.7 · **1.24×** [1.20–1.28] | 44.5 → 66.0 · **1.48×** [1.46–1.53] | same as stock |
+| | 7B | 24.1 → 28.6 · **1.19×** [1.18–1.22] | 22.1 → 24.8 · **1.13×** [1.12–1.15] | same as stock |
+| 8-bit KV cache | 3B | 51.8 → 48.7 · 0.93× [0.93–0.94] | 44.5 → 37.8 · 0.86× [0.83–0.89] | 98–99% same |
+| | 7B | 24.1 → 23.6 · 0.98× [0.98–0.98] | 22.1 → 20.3 · 0.92× [0.91–0.92] | 95–98% same |
 | 4-bit KV cache | 3B | | | broken |
 
 <details>
