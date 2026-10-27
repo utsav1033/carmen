@@ -1,0 +1,50 @@
+[
+  {
+    "kind": "big",
+    "rows": 34,
+    "n": 4810,
+    "dtype": "float32",
+    "seed": 556787913,
+    "family": "fuzz"
+  },
+  {
+    "kind": "normal",
+    "rows": 31,
+    "n": 5135,
+    "dtype": "float32",
+    "seed": 238242717,
+    "family": "fuzz"
+  },
+  {
+    "kind": "causal",
+    "rows": 39,
+    "n": 2610,
+    "dtype": "float16",
+    "seed": 273990256,
+    "family": "fuzz"
+  },
+  {
+    "kind": "bias_mask",
+    "rows": 15,
+    "n": 3279,
+    "dtype": "float16",
+    "seed": 158671754,
+    "family": "fuzz"
+  },
+  {
+    "kind": "causal",
+    "rows": 32,
+    "n": 1378,
+    "dtype": "float16",
+    "seed": 521612143,
+    "family": "fuzz"
+  },
+  {
+    "kind": "normal",
+    "rows": 16,
+    "n": 1787,
+    "dtype": "float32",
+    "seed": 1387063498,
+    "family": "fuzz"
+  }
+]

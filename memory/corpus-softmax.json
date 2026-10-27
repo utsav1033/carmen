@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "neg_inf_mask",
+    "rows": 44,
+    "n": 5411,
+    "dtype": "float32",
+    "seed": 2112238789,
+    "family": "fuzz"
+  },
+  {
+    "kind": "big",
+    "rows": 34,
+    "n": 4974,
+    "dtype": "float16",
+    "seed": 26902193,
+    "family": "fuzz"
+  },
+  {
+    "kind": "normal",
+    "rows": 35,
+    "n": 4792,
+    "dtype": "float32",
+    "seed": 880059810,
+    "family": "fuzz"
+  },
+  {
+    "kind": "spike_last",
+    "rows": 30,
+    "n": 4085,
+    "dtype": "float16",
+    "seed": 2083874391,
+    "family": "fuzz"
+  }
+]
